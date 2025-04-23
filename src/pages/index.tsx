@@ -7,7 +7,7 @@ import useSWR from 'swr';
 // MUI Components
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-// import Grid from '@mui/material/Grid'; // Grid is no longer needed
+import Grid from '@mui/material/Grid'; // Keep Grid for layout flexibility if needed later
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import CardHeader from '@mui/material/CardHeader';
@@ -25,17 +25,18 @@ import NextLink from 'next/link'; // Use Next.js Link for navigation
 
 // MUI Icons
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import HistoryIcon from '@mui/icons-material/History';
-import AssignmentIndIcon from '@mui/icons-material/AssignmentInd';
-import KeyboardReturnIcon from '@mui/icons-material/KeyboardReturn';
-import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
-import InventoryIcon from '@mui/icons-material/Inventory';
+import HistoryIcon from '@mui/icons-material/History'; // For recent activity title
+import AssignmentIndIcon from '@mui/icons-material/AssignmentInd'; // Assigned
+import KeyboardReturnIcon from '@mui/icons-material/KeyboardReturn'; // Returned
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever'; // Written Off
+import InventoryIcon from '@mui/icons-material/Inventory'; // For low stock title
 
 // --- Fetcher function ---
 const fetcher = (url: string) => fetch(url).then((res) => {
     if (!res.ok) {
         const error = new Error('An error occurred while fetching the data.');
         (error as any).status = res.status;
+        // Try to get error message from response body
         return res.json().then(info => {
             (error as any).info = info; // Attach detailed error info if available
             throw error;
@@ -61,13 +62,13 @@ type LowStockItem = {
 };
 
 type RecentActivity = {
-  type: 'assigned' | 'returned' | 'written_off'; // Updated type name
+  type: 'assigned' | 'returned' | 'written_off'; // Updated type name from API
   date: string; // API returns date as string
   employeeFullName: string | null;
   assetTypeName: string | null;
   inventoryNumber: string | null;
   assetInstanceId: number;
-  keySource: string; // Added unique key source
+  keySource: string; // Unique key source from API
 };
 
 type DashboardData = {
@@ -104,14 +105,26 @@ const getActivityIcon = (type: RecentActivity['type']) => { // Use updated type 
 const getActivityDescription = (activity: RecentActivity): React.ReactNode => {
     const assetInfo = (
         <Tooltip title={`ID Екземпляра: ${activity.assetInstanceId}`}>
-            <Box component="span" sx={{ fontWeight: 500 }}>
-                {activity.assetTypeName || 'Невідомий тип'} ({activity.inventoryNumber || 'N/A'})
-            </Box>
+            {/* Make inventory number clickable if possible */}
+             <NextLink href={`/inventory/instance/${activity.assetInstanceId}`} passHref legacyBehavior>
+                 <Link component="span" sx={{ fontWeight: 500 }} underline="hover" color="inherit">
+                    {activity.assetTypeName || 'Невідомий тип'} ({activity.inventoryNumber || 'N/A'})
+                 </Link>
+             </NextLink>
         </Tooltip>
     );
+     const employeeInfo = activity.employeeFullName ? (
+         <NextLink href={`/employees/${/* Need employee ID here if available */ ''}`} passHref legacyBehavior>
+             <Link component="span" sx={{ fontWeight: 'bold' }} underline="hover" color="inherit">
+                 {activity.employeeFullName}
+             </Link>
+         </NextLink>
+     ) : 'N/A';
+
+
     switch (activity.type) { // Use updated type name
-        case 'assigned': return <>Видано {assetInfo} співробітнику <strong>{activity.employeeFullName || 'N/A'}</strong></>;
-        case 'returned': return <>Повернено {assetInfo} від <strong>{activity.employeeFullName || 'N/A'}</strong></>;
+        case 'assigned': return <>Видано {assetInfo} співробітнику {employeeInfo}</>;
+        case 'returned': return <>Повернено {assetInfo} від {employeeInfo}</>;
         case 'written_off': return <>Списано {assetInfo}</>;
         default: return 'Невідома дія';
     }
@@ -166,11 +179,12 @@ export default function DashboardPage() {
 
       {/* --- Data Display --- */}
       {!isLoading && !error && dashboardData && (
+        // Using Box with Flexbox for layout
         <Box
           sx={{
             display: 'flex',
-            flexDirection: { xs: 'column', md: 'row' },
-            gap: 3,
+            flexDirection: { xs: 'column', md: 'row' }, // Stack on small screens, row on medium+
+            gap: 3, // Spacing between items
           }}
         >
           {/* --- First Flex Item (Low Stock Card) --- */}
@@ -193,10 +207,9 @@ export default function DashboardPage() {
                       <ListItem key={item.assetTypeId} disableGutters divider>
                         <ListItemText
                           primary={
-                            // Removed legacyBehavior, passHref is usually sufficient
-                            // Let NextLink render the <a> tag directly
-                            <NextLink href={`/inventory?typeId=${item.assetTypeId}`} passHref>
-                                <Link component="span" underline="hover" color="inherit" sx={{cursor: 'pointer'}}>
+                            // Link to inventory page filtered by type (adjust URL if needed)
+                            <NextLink href={`/inventory?typeId=${item.assetTypeId}`} passHref legacyBehavior>
+                                <Link underline="hover" color="inherit" sx={{cursor: 'pointer'}}>
                                     {item.assetTypeName}
                                 </Link>
                             </NextLink>
@@ -232,16 +245,17 @@ export default function DashboardPage() {
                     Немає нещодавніх дій.
                   </Typography>
                 ) : (
+                  // Display the list of recent activities
                   <List dense>
                     {/* Use activity.keySource for React key */}
                     {dashboardData.recentActivities.map((activity) => (
                       <ListItem key={activity.keySource} disableGutters divider>
-                        <ListItemIcon sx={{ minWidth: 32 }}>
+                        <ListItemIcon sx={{ minWidth: 32, mt: 0.5, alignSelf: 'flex-start' }}> {/* Align icon top */}
                           {getActivityIcon(activity.type)}
                         </ListItemIcon>
                         <ListItemText
                           primary={getActivityDescription(activity)}
-                          secondary={formatDate(activity.date as unknown as string)} // Cast date back to string for formatDate
+                          secondary={formatDate(activity.date)} // Format date
                            primaryTypographyProps={{ variant: 'body2' }}
                            secondaryTypographyProps={{ variant: 'caption', color: 'text.secondary' }}
                         />
