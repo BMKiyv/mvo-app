@@ -1,0 +1,82 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Employee {
+  id             Int       @id @default(autoincrement())
+  full_name      String
+  position       String?
+  contact_info   String?
+  is_active      Boolean   @default(true)
+  is_responsible Boolean   @default(false)
+  created_at     DateTime  @default(now())
+  updated_at     DateTime? @updatedAt
+
+  assetInstances AssetInstance[] @relation("CurrentHolder")
+  assignments    AssetAssignmentHistory[]
+}
+
+model AssetCategory {
+  id         Int          @id @default(autoincrement())
+  name       String       @unique
+  created_at DateTime     @default(now())
+  updated_at DateTime?    @updatedAt
+
+  assetTypes AssetType[]
+}
+
+model AssetType {
+  id                 Int             @id @default(autoincrement())
+  name               String
+  minimum_stock_level Int
+  notes              String?
+  created_at         DateTime        @default(now())
+  updated_at         DateTime?       @updatedAt
+
+  categoryId         Int
+  category           AssetCategory   @relation(fields: [categoryId], references: [id])
+
+  assetInstances     AssetInstance[]
+}
+
+model AssetInstance {
+  id                   Int       @id @default(autoincrement())
+  inventoryNumber      String    @unique
+  unit_cost            Decimal   @db.Decimal(10, 2)
+  purchase_date        DateTime
+  status               String    // 'on_stock', 'issued', 'written_off', etc.
+  notes                String?
+
+  created_at           DateTime  @default(now())
+  updated_at           DateTime? @updatedAt
+
+  assetTypeId          Int
+  assetType            AssetType @relation(fields: [assetTypeId], references: [id])
+
+  current_employee_id  Int?
+  currentEmployee      Employee? @relation("CurrentHolder", fields: [current_employee_id], references: [id])
+
+  assignmentHistory    AssetAssignmentHistory[]
+}
+
+model AssetAssignmentHistory {
+  id                Int       @id @default(autoincrement())
+  asset_instance_id Int
+  employee_id       Int
+  assignment_date   DateTime  @default(now())
+  return_date       DateTime?
+
+  assetInstance     AssetInstance @relation(fields: [asset_instance_id], references: [id])
+  employee          Employee      @relation(fields: [employee_id], references: [id])
+}
