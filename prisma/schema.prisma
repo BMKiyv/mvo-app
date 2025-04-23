@@ -1,11 +1,9 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
+  // output   = "../node_modules/.prisma/client" // Recommended for explicit output path
 }
 
 datasource db {
@@ -14,69 +12,96 @@ datasource db {
 }
 
 model Employee {
-  id             Int       @id @default(autoincrement())
+  id             Int      @id @default(autoincrement())
   full_name      String
   position       String?
   contact_info   String?
-  is_active      Boolean   @default(true)
-  is_responsible Boolean   @default(false)
-  created_at     DateTime  @default(now())
+  is_active      Boolean  @default(true)
+  is_responsible Boolean  @default(false)
+  created_at     DateTime @default(now())
   updated_at     DateTime? @updatedAt
 
-  assetInstances AssetInstance[] @relation("CurrentHolder")
+  // Relations
+  assetInstances AssetInstance[]          @relation("CurrentHolder")
   assignments    AssetAssignmentHistory[]
 }
 
 model AssetCategory {
-  id         Int          @id @default(autoincrement())
-  name       String       @unique
-  created_at DateTime     @default(now())
-  updated_at DateTime?    @updatedAt
+  id         Int       @id @default(autoincrement())
+  name       String    @unique
+  created_at DateTime  @default(now())
+  updated_at DateTime? @updatedAt
 
+  // Relations
   assetTypes AssetType[]
 }
 
 model AssetType {
-  id                 Int             @id @default(autoincrement())
-  name               String
-  minimum_stock_level Int
-  notes              String?
-  created_at         DateTime        @default(now())
-  updated_at         DateTime?       @updatedAt
+  id                  Int       @id @default(autoincrement())
+  name                String
+  minimum_stock_level Int       // Minimum total quantity for this type
+  notes               String?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime? @updatedAt
 
-  categoryId         Int
-  category           AssetCategory   @relation(fields: [categoryId], references: [id])
+  categoryId          Int
+  // Relations
+  category            AssetCategory   @relation(fields: [categoryId], references: [id])
+  assetInstances      AssetInstance[]
+}
 
-  assetInstances     AssetInstance[]
+// Enum for asset statuses remains the same
+enum AssetStatus {
+  on_stock
+  issued
+  written_off
+  in_repair
+  lost
+  reserved
 }
 
 model AssetInstance {
-  id                   Int       @id @default(autoincrement())
-  inventoryNumber      String    @unique
-  unit_cost            Decimal   @db.Decimal(10, 2)
-  purchase_date        DateTime
-  status               String    // 'on_stock', 'issued', 'written_off', etc.
-  notes                String?
+  id                  Int       @id @default(autoincrement())
+  // inventoryNumber is no longer unique. Multiple records might share one
+  // if they represent a batch, or it could be unique for individually tracked items.
+  inventoryNumber     String
+  unit_cost           Decimal   @db.Decimal(10, 2) // Cost per single unit
+  purchase_date       DateTime
+  status              AssetStatus @default(on_stock)
+  notes               String?
 
-  created_at           DateTime  @default(now())
-  updated_at           DateTime? @updatedAt
+  // NEW FIELD: Quantity for this specific instance/batch
+  // Represents how many units this record holds.
+  // Default is 1 for individually tracked items.
+  quantity            Int       @default(1)
 
-  assetTypeId          Int
-  assetType            AssetType @relation(fields: [assetTypeId], references: [id])
+  created_at          DateTime  @default(now())
+  updated_at          DateTime? @updatedAt
 
-  current_employee_id  Int?
-  currentEmployee      Employee? @relation("CurrentHolder", fields: [current_employee_id], references: [id])
+  assetTypeId         Int
+  // current_employee_id now represents the employee holding *this specific record*.
+  // If quantity > 1, this record should ideally have status 'on_stock' and null employee.
+  // When issuing one unit from a batch, a new record with quantity 1 and status 'issued' should be created.
+  current_employee_id Int?
 
-  assignmentHistory    AssetAssignmentHistory[]
+  // Relations
+  assetType           AssetType  @relation(fields: [assetTypeId], references: [id])
+  currentEmployee     Employee?  @relation("CurrentHolder", fields: [current_employee_id], references: [id])
+  // assignmentHistory tracks assignments of specific instances (usually those with quantity=1)
+  assignmentHistory   AssetAssignmentHistory[]
 }
 
 model AssetAssignmentHistory {
-  id                Int       @id @default(autoincrement())
-  asset_instance_id Int
-  employee_id       Int
-  assignment_date   DateTime  @default(now())
-  return_date       DateTime?
+  id                  Int       @id @default(autoincrement())
+  // Refers to the specific AssetInstance record that was assigned (typically one with quantity=1)
+  asset_instance_id   Int
+  employee_id         Int
+  assignment_date     DateTime  @default(now())
+  return_date         DateTime?
+  // Optional: Add quantity assigned if needed, though typically history tracks single instances
+  // quantity_assigned Int?
 
-  assetInstance     AssetInstance @relation(fields: [asset_instance_id], references: [id])
-  employee          Employee      @relation(fields: [employee_id], references: [id])
+  // Relations
+  assetInstance       AssetInstance @relation(fields: [asset_instance_id], references: [id])
+  employee            Employee      @relation(fields: [employee_id], references: [id])
 }

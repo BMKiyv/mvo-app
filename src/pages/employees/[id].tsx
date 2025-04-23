@@ -1,189 +1,271 @@
-// pages/api/employees/[id].ts
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient, Prisma } from '@prisma/client';
+// pages/employees/[id].tsx
+'use client';
 
-const prisma = new PrismaClient();
+import * as React from 'react';
+import { useRouter } from 'next/router';
+import useSWR, { useSWRConfig } from 'swr'; // Import useSWRConfig for mutate
 
-// Define the structure of the data we expect in the PUT request body
-type UpdateEmployeeDto = {
-  full_name?: string; // Optional fields for update
-  position?: string | null;
-  contact_info?: string | null;
-  // is_active and is_responsible should generally not be updated directly here
-  // Use DELETE for deactivation, and potentially a dedicated endpoint for responsibility change
+// MUI Components
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
+import Button from '@mui/material/Button';
+import CircularProgress from '@mui/material/CircularProgress';
+import Alert from '@mui/material/Alert'; // Import Alert
+import Paper from '@mui/material/Paper';
+import Table from '@mui/material/Table';
+import TableBody from '@mui/material/TableBody';
+import TableCell from '@mui/material/TableCell';
+import TableContainer from '@mui/material/TableContainer';
+import TableHead from '@mui/material/TableHead';
+import TableRow from '@mui/material/TableRow';
+import Divider from '@mui/material/Divider';
+import Chip from '@mui/material/Chip';
+import Snackbar from '@mui/material/Snackbar'; // For notifications
+
+// MUI Icons
+import AddShoppingCartIcon from '@mui/icons-material/AddShoppingCart';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import Link from 'next/link'; // Use NextLink for navigation
+
+// Import the Issue Asset Modal component
+import IssueAssetModal from '../../components/IssueAssetModal'; // Adjust path if necessary
+
+// --- Fetcher function ---
+const fetcher = async (url: string) => {
+    const res = await fetch(url);
+    if (!res.ok) {
+        const error = new Error('An error occurred while fetching the data.');
+        try { (error as any).info = await res.json(); } catch (e) { /* Ignore */ }
+        (error as any).status = res.status;
+        throw error;
+    }
+    if (res.status === 204 || res.headers.get('content-length') === '0') return null;
+    return res.json();
 };
 
-// Define the structure of the data we want to return after update/delete
-type EmployeeSelectedData = {
-  id: number;
-  full_name: string;
-  position: string | null;
-  contact_info: string | null;
-  is_active: boolean;
-  is_responsible: boolean;
+// --- Types from API ---
+type EmployeeDetailsData = {
+  id: number; full_name: string; position: string | null; contact_info: string | null;
+  is_active: boolean; is_responsible: boolean; created_at: string;
 };
-
-type DeactivatedEmployeeData = {
+type AssignedAssetData = {
+  instanceId: number; inventoryNumber: string; assetTypeName: string;
+};
+// Type for the data returned by the assign API
+type AssignedInstanceData = {
     id: number;
-    is_active: boolean;
-}
+    assetTypeName?: string;
+    inventoryNumber: string;
+    // Add other fields if returned by API and needed
+};
 
-type ApiErrorData = { message: string };
+// Define the type for Snackbar state, including 'warning' severity
+type SnackbarState = {
+    open: boolean;
+    message: string;
+    severity: 'success' | 'error' | 'info' | 'warning'; // Added 'warning'
+} | null;
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<EmployeeSelectedData | DeactivatedEmployeeData | ApiErrorData>
-) {
-  const { id } = req.query;
 
-  // Validate ID
-  if (typeof id !== 'string' || isNaN(parseInt(id))) {
-    return res.status(400).json({ message: 'Invalid employee ID format.' });
+export default function EmployeeDetailPage() {
+  const router = useRouter();
+  const { mutate } = useSWRConfig(); // Get mutate function from SWR
+  const { id } = router.query;
+  const employeeId = typeof id === 'string' ? parseInt(id, 10) : null;
+
+  // --- State for Issue Asset Modal ---
+  const [isIssueModalOpen, setIsIssueModalOpen] = React.useState(false);
+  // --- State for Snackbar Notifications (using updated type) ---
+  const [snackbar, setSnackbar] = React.useState<SnackbarState>(null);
+
+
+  // Fetch employee details
+  const employeeDetailsUrl = employeeId ? `/api/employees/${employeeId}` : null;
+  const { data: employee, error: employeeError, isLoading: isLoadingEmployee } = useSWR<EmployeeDetailsData>(
+    employeeDetailsUrl,
+    fetcher
+  );
+
+  // Fetch assigned assets
+  const assignedAssetsUrl = employeeId ? `/api/employees/${employeeId}/assets` : null;
+  const { data: assets, error: assetsError, isLoading: isLoadingAssets } = useSWR<AssignedAssetData[]>(
+    assignedAssetsUrl,
+    fetcher
+  );
+
+  // --- Handlers ---
+  const handleOpenIssueModal = () => {
+      if (employee && employee.is_active) { // Open only if employee data loaded and active
+          setIsIssueModalOpen(true);
+      } else if (employee && !employee.is_active) {
+          // Show warning if employee is inactive
+          setSnackbar({ open: true, message: 'Неможливо видати актив неактивному співробітнику.', severity: 'warning' }); // Use 'warning'
+      } else {
+           // Handle case where employee data might not be loaded yet
+           setSnackbar({ open: true, message: 'Дані співробітника ще завантажуються.', severity: 'info' });
+      }
+  };
+
+  const handleCloseIssueModal = () => {
+    setIsIssueModalOpen(false);
+  };
+
+  // Handler for successful asset assignment
+  const handleIssueSuccess = (assignedAsset: AssignedInstanceData) => {
+      setSnackbar({ open: true, message: `Актив "${assignedAsset.assetTypeName || assignedAsset.inventoryNumber}" успішно видано!`, severity: 'success' });
+      // Revalidate the assigned assets list to show the newly added item
+      if (assignedAssetsUrl) {
+          mutate(assignedAssetsUrl);
+      }
+      // Modal is closed by the IssueAssetModal component itself
+  };
+
+   // --- Snackbar Close Handler ---
+   const handleCloseSnackbar = (event?: React.SyntheticEvent | Event, reason?: string) => {
+    if (reason === 'clickaway') return;
+    setSnackbar(null);
+  };
+
+  // --- Render Loading ---
+  if (isLoadingEmployee || (employeeId && isLoadingAssets && !assets && !assetsError)) { // Adjusted loading condition
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
+        <CircularProgress />
+      </Box>
+    );
   }
-  const employeeId = parseInt(id);
 
-  // --- Handle PUT request to update an employee ---
-  if (req.method === 'PUT') {
-    try {
-      const { full_name, position, contact_info } = req.body as UpdateEmployeeDto;
+  // --- Render Error for Employee ---
+   if (employeeError) {
+     return (
+         <Box>
+             <Button component={Link} href="/employees" startIcon={<ArrowBackIcon />} sx={{ mb: 2 }}>
+                 До списку співробітників
+             </Button>
+             <Alert severity="error">
+                Не вдалося завантажити дані співробітника. {(employeeError as any).info?.message || employeeError.message}
+             </Alert>
+         </Box>
+     );
+   }
+   // --- Render Not Found for Employee ---
+   if (!employee) {
+        return (
+             <Box>
+                <Button component={Link} href="/employees" startIcon={<ArrowBackIcon />} sx={{ mb: 2 }}>
+                    До списку співробітників
+                </Button>
+                <Alert severity="warning">Співробітника не знайдено або він неактивний.</Alert>
+            </Box>
+        );
+   }
 
-      // --- Data Validation ---
-      const updateData: Prisma.EmployeeUpdateInput = {};
-      if (full_name !== undefined) {
-          if (!full_name.trim()) return res.status(400).json({ message: 'Full name cannot be empty.' });
-          updateData.full_name = full_name;
-      }
-      if (position !== undefined) { // Allow setting position to null or empty string
-          updateData.position = position;
-      }
-      if (contact_info !== undefined) { // Allow setting contact_info to null or empty string
-          // Optional: Add email format validation if contact_info is always an email
-          // if (contact_info && !/\S+@\S+\.\S+/.test(contact_info)) {
-          //     return res.status(400).json({ message: 'Invalid email format for contact info.' });
-          // }
-          updateData.contact_info = contact_info;
-      }
+  // --- Render Content ---
+  return (
+    <Box>
+        <Button component={Link} href="/employees" startIcon={<ArrowBackIcon />} sx={{ mb: 2 }}>
+             До списку співробітників
+         </Button>
+      {/* --- Employee Info Section --- */}
+      <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
+         {/* Employee details rendering */}
+         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+            <Typography variant="h4" component="h1" gutterBottom>
+            {employee.full_name}
+            </Typography>
+            <Box>
+                 {employee.is_responsible && <Chip label="Відповідальна особа" color="primary" size="small" sx={{ mr: 1 }} />}
+                 <Chip label={employee.is_active ? "Активний" : "Неактивний"} color={employee.is_active ? "success" : "default"} size="small" />
+            </Box>
+        </Box>
+        <Typography variant="h6" color="text.secondary" gutterBottom>
+          {employee.position || '(Посада не вказана)'}
+        </Typography>
+        <Typography variant="body1" color="text.secondary">
+          {employee.contact_info || '(Контактна інформація не вказана)'}
+        </Typography>
+         <Typography variant="caption" color="text.secondary" display="block" sx={{mt: 1}}>
+          Зареєстровано: {new Date(employee.created_at).toLocaleDateString('uk-UA')}
+        </Typography>
+      </Paper>
 
-      // Check if there's anything to update
-      if (Object.keys(updateData).length === 0) {
-          return res.status(400).json({ message: 'No fields provided for update.' });
-      }
+      <Divider sx={{ my: 3 }} />
 
-      // --- Perform Update ---
-      const updatedEmployee = await prisma.employee.update({
-        where: { id: employeeId },
-        data: updateData,
-        select: { // Return updated data in the desired format
-          id: true,
-          full_name: true,
-          position: true,
-          contact_info: true,
-          is_active: true,
-          is_responsible: true,
-        },
-      });
+      {/* --- Assigned Assets Section --- */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h5" component="h2">
+          Виданий Інвентар
+        </Typography>
+        {/* Show button only if employee is active */}
+        {employee.is_active && (
+            <Button
+                variant="contained"
+                startIcon={<AddShoppingCartIcon />}
+                onClick={handleOpenIssueModal}
+                >
+                Видати Інвентар
+            </Button>
+        )}
+      </Box>
 
-      res.status(200).json(updatedEmployee);
+      {/* Asset Loading/Error */}
+       {isLoadingAssets && !assets && <CircularProgress size={24} sx={{ display: 'block', mx: 'auto' }} />}
+       {assetsError && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+                Не вдалося завантажити список активів. {(assetsError as any).info?.message || assetsError.message}
+            </Alert>
+       )}
 
-    } catch (error) {
-      console.error(`Failed to update employee ${employeeId}:`, error);
-      if (error instanceof Prisma.PrismaClientKnownRequestError) {
-        if (error.code === 'P2025') { // Record to update not found
-          return res.status(404).json({ message: `Employee with ID ${employeeId} not found.` });
-        }
-        if (error.code === 'P2002') { // Unique constraint violation
-          // Provide more specific feedback if possible
-          const target = error.meta?.target as string[] | undefined;
-          const field = target ? target.join(', ') : 'field';
-          return res.status(409).json({ message: `Update failed: An employee with this ${field} already exists.` });
-        }
-      }
-      res.status(500).json({ message: 'Internal Server Error' });
-    } finally {
-      await prisma.$disconnect();
-    }
-  }
-  // --- Handle DELETE request (Logical Delete) ---
-  else if (req.method === 'DELETE') {
-       try {
-            // Check if employee exists before trying to deactivate
-            const employeeToDeactivate = await prisma.employee.findUnique({
-                where: { id: employeeId },
-                select: { is_active: true } // Only need to know if it exists/is active
-            });
+      {/* Asset Table/Message */}
+      {!isLoadingAssets && assets && (
+        assets.length === 0 ? (
+          <Typography sx={{ textAlign: 'center', mt: 3, color: 'text.secondary' }}>
+            Поки нічого не видавали.
+          </Typography>
+        ) : (
+          <TableContainer component={Paper} elevation={2}>
+            <Table sx={{ minWidth: 650 }} aria-label="assigned assets table">
+              <TableHead sx={{ backgroundColor: 'action.hover' }}>
+                <TableRow>
+                  <TableCell>Назва Активу</TableCell>
+                  <TableCell>Інвентарний Номер</TableCell>
+                  {/* <TableCell>Дата Видачі</TableCell> */}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {assets.map((asset) => (
+                  <TableRow key={asset.instanceId} sx={{ '&:last-child td, &:last-child th': { border: 0 } }}>
+                    <TableCell component="th" scope="row">{asset.assetTypeName}</TableCell>
+                    <TableCell>{asset.inventoryNumber}</TableCell>
+                    {/* <TableCell>{asset.assignmentDate ? new Date(asset.assignmentDate).toLocaleDateString('uk-UA') : 'N/A'}</TableCell> */}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )
+      )}
 
-            if (!employeeToDeactivate) {
-                 return res.status(404).json({ message: `Employee with ID ${employeeId} not found.` });
-            }
-            // Optional: Prevent deactivating already inactive employee?
-            // if (!employeeToDeactivate.is_active) {
-            //     return res.status(400).json({ message: `Employee with ID ${employeeId} is already inactive.` });
-            // }
+       {/* --- Issue Asset Modal --- */}
+       {/* Render the modal and control its visibility with state */}
+       <IssueAssetModal
+            open={isIssueModalOpen}
+            onClose={handleCloseIssueModal}
+            employeeId={employeeId} // Pass the current employee's ID
+            employeeName={employee?.full_name || ''} // Pass the name for the title
+            onSubmitSuccess={handleIssueSuccess} // Pass the success handler
+       />
 
-            // Perform logical delete: set is_active to false
-            const deactivatedEmployee = await prisma.employee.update({
-                where: { id: employeeId },
-                data: {
-                    is_active: false,
-                    // Ensure deactivated employee is not responsible
-                    is_responsible: false,
-                },
-                 select: { id: true, is_active: true }, // Return minimal confirmation
-            });
+        {/* --- Snackbar for Notifications --- */}
+       {snackbar && (
+           <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+             {/* Ensure Alert component can handle the severity passed */}
+             <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>
+               {snackbar.message}
+             </Alert>
+           </Snackbar>
+       )}
 
-            // --- Optional: Handle Asset Unassignment ---
-            // Find assets currently assigned to this employee
-            const assignedAssets = await prisma.assetInstance.findMany({
-                where: { current_employee_id: employeeId },
-                select: { id: true }
-            });
-
-            if (assignedAssets.length > 0) {
-                const assetIds = assignedAssets.map(a => a.id);
-                // Unassign assets (set back to 'on_stock' or another status)
-                await prisma.assetInstance.updateMany({
-                    where: { id: { in: assetIds } },
-                    data: {
-                        current_employee_id: null,
-                        status: 'on_stock' // Or 'returned_from_deactivated' etc.
-                    }
-                });
-                // Add records to assignment history indicating return due to deactivation
-                const historyRecords = assetIds.map(assetId => ({
-                    asset_instance_id: assetId,
-                    employee_id: employeeId, // The employee being deactivated
-                    assignment_date: new Date(), // This is actually the return date conceptually
-                    return_date: new Date(),
-                    // notes: "Повернуто у зв'язку з деактивацією співробітника" // Add notes if you have the field
-                }));
-                 // Find the latest assignment for each asset to update return_date
-                 // This is more complex, might be better handled differently or skipped for simplicity
-                 // For now, we just unassign the asset instance. History might need manual adjustment or separate logic.
-                 console.log(`Unassigned ${assetIds.length} assets from deactivated employee ${employeeId}`);
-
-            }
-
-
-            res.status(200).json(deactivatedEmployee); // Send back confirmation
-
-       } catch (error) {
-            console.error(`Failed to deactivate employee ${employeeId}:`, error);
-            // P2025 might occur if the employee is deleted between the findUnique and update calls (race condition)
-            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-                return res.status(404).json({ message: `Employee with ID ${employeeId} not found during deactivation.` });
-            }
-            res.status(500).json({ message: 'Internal Server Error' });
-       } finally {
-            await prisma.$disconnect();
-       }
-  }
-  // --- Handle other methods ---
-  else {
-    if (res) {
-        res.setHeader('Allow', ['PUT', 'DELETE']); // Specify allowed methods
-        res.status(405).json({ message: `Method ${req.method} Not Allowed` });
-    } else {
-        console.error('FATAL: Response object is undefined in the final else block for [id] route!');
-    }
-  }
+    </Box>
+  );
 }
