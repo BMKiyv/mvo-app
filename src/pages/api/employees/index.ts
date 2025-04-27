@@ -1,10 +1,13 @@
 // pages/api/employees/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient, Prisma } from '@prisma/client'; // Import Prisma types
+// Імпортуємо Enum CommissionRole разом з іншими типами
+import { PrismaClient, Prisma, CommissionRole } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-// Define the structure of the data we want to return (excluding timestamps)
+// --- Типи Даних ---
+
+// Тип для відповіді GET та POST (тепер включає commission_role)
 type EmployeeSelectedData = {
   id: number;
   full_name: string;
@@ -12,19 +15,28 @@ type EmployeeSelectedData = {
   contact_info: string | null;
   is_active: boolean;
   is_responsible: boolean;
-  // created_at and updated_at are omitted for GET list, but might be in created object
+  commission_role: CommissionRole; // Додано поле
 };
 
-// Update the API response data type for GET
-type GetApiResponseData = Omit<EmployeeSelectedData, 'created_at' | 'updated_at'>[]; // Omitting timestamps for GET list
+// Тип для відповіді GET (список)
+type GetApiResponseData = EmployeeSelectedData[];
 
-// Type for POST response (might include timestamps depending on select)
-type PostApiResponseData = EmployeeSelectedData; // Assuming select returns this
+// Тип для відповіді POST (один створений об'єкт)
+// Оскільки POST повертає масив з одним елементом, визначимо його так
+type PostApiResponseData = EmployeeSelectedData[];
+
+// Тип для тіла POST запиту (включає необов'язкову роль)
+type CreateEmployeeDto = {
+  full_name: string;
+  position?: string | null;
+  contact_info?: string | null;
+  commission_role?: CommissionRole; // Необов'язкове поле
+};
 
 type ApiErrorData = { message: string; details?: any };
 
-// Combined type for NextApiResponse
-type ApiResponse = GetApiResponseData | PostApiResponseData[] | ApiErrorData; // POST returns array
+// Об'єднаний тип відповіді
+type ApiResponse = GetApiResponseData | PostApiResponseData | ApiErrorData;
 
 export default async function handler(
   req: NextApiRequest,
@@ -37,9 +49,10 @@ export default async function handler(
     try {
       const employees = await prisma.employee.findMany({
         where: { is_active: true },
-        select: {
+        select: { // Додаємо commission_role до select
           id: true, full_name: true, position: true,
           contact_info: true, is_active: true, is_responsible: true,
+          commission_role: true, // <--- Додано
         },
         orderBy: { full_name: 'asc' },
       });
@@ -50,31 +63,39 @@ export default async function handler(
       if (!res) { console.error("GET Error: Response object undefined!"); return; }
       res.status(500).json({ message: 'Internal Server Error' });
     } finally {
-      await prisma.$disconnect();
+      // Disconnect moved
     }
   } else if (req.method === 'POST') {
       // --- Handle POST ---
-      console.log("POST Request Body:", req.body); // Log received body
+      console.log("POST Request Body:", req.body);
       try {
-          const { full_name, position, contact_info } = req.body;
+          // Отримуємо commission_role з тіла запиту
+          const { full_name, position, contact_info, commission_role } = req.body as CreateEmployeeDto;
 
-          // Basic validation
+          // --- Валідація ---
           if (!full_name || typeof full_name !== 'string' || !full_name.trim()) {
                if (!res) { console.error("POST Validation Error: Response object undefined!"); return; }
               return res.status(400).json({ message: 'Full name is required and must be a non-empty string.' });
           }
-          // Add more specific validation if needed
+          // Валідація commission_role (чи є воно одним із значень Enum?)
+          const validRoles = Object.values(CommissionRole);
+          if (commission_role && !validRoles.includes(commission_role)) {
+               if (!res) { console.error("POST Validation Error: Response object undefined!"); return; }
+               return res.status(400).json({ message: `Invalid commission role provided. Valid roles are: ${validRoles.join(', ')}` });
+          }
 
           console.log("Attempting to create employee in DB...");
           const newEmployee = await prisma.employee.create({
               data: {
-                  full_name: full_name.trim(), // Trim whitespace
-                  position: position || null, // Ensure null if empty
-                  contact_info: contact_info || null, // Ensure null if empty
+                  full_name: full_name.trim(),
+                  position: position || null,
+                  contact_info: contact_info || null,
                   is_active: true,
                   is_responsible: false,
+                  // Встановлюємо роль або значення за замовчуванням (none)
+                  commission_role: commission_role || CommissionRole.none, // <--- Додано поле
               },
-              // Select the fields needed by the frontend
+              // Select включає нове поле
               select: {
                   id: true,
                   full_name: true,
@@ -82,30 +103,28 @@ export default async function handler(
                   contact_info: true,
                   is_active: true,
                   is_responsible: true,
-                  // Include created_at if needed by EmployeeApiResponse type
-                  // created_at: true,
+                  commission_role: true, // <--- Додано
               }
           });
-          console.log("Employee created successfully in DB:", newEmployee); // Log success and data
+          console.log("Employee created successfully in DB:", newEmployee);
 
           if (!res) { console.error("POST Success: Response object undefined before sending!"); return; }
-          // Send response as an array containing the new employee object
-          res.status(201).json([newEmployee]); // Ensure it's an array
+          // Повертаємо масив з одним елементом
+          res.status(201).json([newEmployee]);
 
       } catch (error) {
-           console.error('POST Error: Failed to create employee:', error); // Log the actual error
+           console.error('POST Error: Failed to create employee:', error);
            if (!res) { console.error("POST Error: Response object undefined!"); return; }
 
            if (error instanceof Prisma.PrismaClientKnownRequestError) {
-               if (error.code === 'P2002') { // Unique constraint violation
+               if (error.code === 'P2002') {
                    const target = error.meta?.target ?? 'field';
                    return res.status(409).json({ message: `Employee with this ${target} already exists.` });
                }
            }
-           // Provide more details in the error response if possible
            res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) });
       } finally {
-          await prisma.$disconnect();
+          // Disconnect moved
       }
 
   } else {
@@ -114,5 +133,10 @@ export default async function handler(
     if (!res) { console.error("Method Not Allowed: Response object undefined!"); return; }
     res.setHeader('Allow', ['GET', 'POST']);
     res.status(405).json({ message: `Method ${req.method} Not Allowed` });
+  }
+
+  // Disconnect Prisma Client finally after handling request
+  if (prisma) {
+      await prisma.$disconnect().catch((e: unknown) => console.error("Failed to disconnect Prisma Client:", e));
   }
 }

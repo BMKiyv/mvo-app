@@ -3,12 +3,15 @@
 
 import * as React from 'react';
 import useSWR, { useSWRConfig } from 'swr';
-import { useRouter } from 'next/router'; // Import useRouter for navigation
-// Переконайтесь, що шляхи до модальних вікон правильні
+import { useRouter } from 'next/router';
+
+// Import Modal components
 import AddEmployeeModal from '@/components/AddEmployeeModal';
 import EditEmployeeModal from '@/components/EditEmployeeModal';
+import ProcessDeactivationAssetsModal from '@/components/ProcessDeactivationAssetsModal';
 
-// Import the specific type returned by your API
+// --- Types ---
+// Тип відповіді API для списку/оновлення/створення співробітника
 type EmployeeApiResponse = {
     id: number;
     full_name: string;
@@ -18,6 +21,19 @@ type EmployeeApiResponse = {
     is_responsible: boolean;
 };
 
+// Тип відповіді від API деактивації
+type EmployeeDeactivateResponseData = {
+    id: number;
+    is_active: boolean;
+};
+
+// *** ДОДАНО: Тип для помилки API ***
+type ApiErrorData = {
+    message: string;
+    details?: any;
+};
+
+
 // MUI Components
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -26,7 +42,7 @@ import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/DeleteOutline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
-import VisibilityIcon from '@mui/icons-material/Visibility'; // Import View icon
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import IconButton from '@mui/material/IconButton';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
@@ -59,47 +75,36 @@ const fetcher = (url: string) => fetch(url).then((res) => {
 
 export default function EmployeesPage() {
     const { mutate } = useSWRConfig();
-    const router = useRouter(); // Initialize router
+    const router = useRouter();
     const { data: employees, error, isLoading } = useSWR<EmployeeApiResponse[]>('/api/employees', fetcher);
 
-    // --- State for Action Menu ---
+    // --- States ---
     const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
     const [selectedEmployeeForMenu, setSelectedEmployeeForMenu] = React.useState<EmployeeApiResponse | null>(null);
     const menuOpen = Boolean(anchorEl);
-
-    // --- State for Modals ---
     const [editModalOpen, setEditModalOpen] = React.useState(false);
     const [addModalOpen, setAddModalOpen] = React.useState(false);
     const [employeeToEdit, setEmployeeToEdit] = React.useState<EmployeeApiResponse | null>(null);
-
-    // --- State for Snackbar Notifications ---
-    const [snackbar, setSnackbar] = React.useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' } | null>(null);
+    const [processAssetsModalOpen, setProcessAssetsModalOpen] = React.useState(false);
+    const [employeeToProcess, setEmployeeToProcess] = React.useState<EmployeeApiResponse | null>(null);
+    const [isDeactivating, setIsDeactivating] = React.useState(false);
+    const [snackbar, setSnackbar] = React.useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' | 'warning' } | null>(null);
 
 
     // --- Handlers for Action Menu ---
     const handleMenuClick = (event: React.MouseEvent<HTMLElement>, employee: EmployeeApiResponse) => {
-        console.log("Menu clicked for:", employee);
         setAnchorEl(event.currentTarget);
         setSelectedEmployeeForMenu(employee);
     };
     const handleMenuClose = () => {
         setAnchorEl(null);
-        // Don't clear selectedEmployeeForMenu here immediately
     };
 
     // --- Handler for View Action ---
     const handleViewDetails = () => {
-        console.log("handleViewDetails called.");
-        console.log("Current selectedEmployeeForMenu:", selectedEmployeeForMenu);
-
         if (selectedEmployeeForMenu && typeof selectedEmployeeForMenu.id === 'number') {
             const targetUrl = `/employees/${selectedEmployeeForMenu.id}`;
-            console.log("Attempting to navigate to:", targetUrl);
             router.push(targetUrl)
-                .then((success) => {
-                    if (success) { console.log("Navigation successful!"); }
-                    else { console.warn("Navigation returned false, possibly interrupted."); }
-                })
                 .catch(err => {
                     console.error("Navigation error in router.push:", err);
                     setSnackbar({ open: true, message: `Помилка переходу: ${err.message}`, severity: 'error' });
@@ -108,9 +113,8 @@ export default function EmployeesPage() {
             console.error("Cannot navigate: selectedEmployeeForMenu or its ID is invalid.", selectedEmployeeForMenu);
             setSnackbar({ open: true, message: 'Не вдалося отримати ID співробітника для перегляду.', severity: 'error' });
         }
-        // Close menu AFTER navigation attempt
-        setAnchorEl(null);
-        setSelectedEmployeeForMenu(null); // Clear selection here
+        setAnchorEl(null); // Close menu
+        setSelectedEmployeeForMenu(null); // Clear selection
     };
 
     // --- Handlers for Edit Modal ---
@@ -121,11 +125,8 @@ export default function EmployeesPage() {
         } else {
              console.error("Cannot open Edit Modal: selectedEmployeeForMenu is null.");
         }
-        handleMenuClose(); // Close the menu itself
+        handleMenuClose();
     };
-    // *** ВИДАЛЕНО ЗАГЛУШКИ ЗВІДСИ ***
-
-    // --- Re-add implementations for handlers (ЗАЛИШЕНО ТІЛЬКИ РЕАЛІЗАЦІЇ) ---
      const handleCloseEditModal = () => {
         setEditModalOpen(false);
         setEmployeeToEdit(null);
@@ -137,12 +138,10 @@ export default function EmployeesPage() {
         }, false);
         setSnackbar({ open: true, message: `Дані співробітника ${updatedEmployee?.full_name || ''} оновлено!`, severity: 'success' });
      };
-     const handleOpenAddModal = () => {
-        setAddModalOpen(true);
-     };
-     const handleCloseAddModal = () => {
-        setAddModalOpen(false);
-     };
+
+     // --- Handlers for Add Modal ---
+     const handleOpenAddModal = () => { setAddModalOpen(true); };
+     const handleCloseAddModal = () => { setAddModalOpen(false); };
      const handleAddSuccess = (newEmployee: EmployeeApiResponse) => {
         if (!newEmployee || !newEmployee.full_name) {
             console.error("handleAddSuccess received invalid newEmployee:", newEmployee);
@@ -157,33 +156,63 @@ export default function EmployeesPage() {
         }, false);
         setSnackbar({ open: true, message: `Співробітника "${newEmployee.full_name}" успішно додано!`, severity: 'success' });
      };
-     const handleDelete = async () => {
-        const employeeToDelete = selectedEmployeeForMenu;
-        setAnchorEl(null); // Close menu immediately
 
-        if (employeeToDelete) {
-          const confirmed = confirm(`Ви впевнені, що хочете деактивувати співробітника ${employeeToDelete.full_name}? Активи будуть повернуті на склад.`);
-          if (confirmed) {
-              try {
-                  const response = await fetch(`/api/employees/${employeeToDelete.id}`, { method: 'DELETE' });
-                  if (!response.ok) {
-                      const errorData = await response.json();
-                      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-                  }
-                  mutate('/api/employees', (currentData: EmployeeApiResponse[] = []) => {
-                       return currentData.filter(emp => emp && emp.id !== employeeToDelete.id);
-                  }, false);
-                  setSnackbar({ open: true, message: 'Співробітника деактивовано.', severity: 'success' });
-              } catch (err) {
-                  console.error('Error during delete request:', err);
-                   setSnackbar({ open: true, message: `Помилка видалення: ${err instanceof Error ? err.message : 'Невідома помилка'}`, severity: 'error' });
-              }
-          }
+    // --- Handlers for Deactivation Process ---
+    const handleOpenProcessAssetsModal = () => {
+        if (selectedEmployeeForMenu) {
+            setEmployeeToProcess(selectedEmployeeForMenu);
+            setProcessAssetsModalOpen(true);
         } else {
-             console.error("Delete failed: selectedEmployeeForMenu was null");
+            console.error("Cannot open Process Assets Modal: selectedEmployeeForMenu is null.");
         }
-        setSelectedEmployeeForMenu(null); // Clear selection after operations
-     };
+        handleMenuClose();
+    };
+
+     const handleCloseProcessAssetsModal = () => {
+        setProcessAssetsModalOpen(false);
+        setEmployeeToProcess(null);
+    };
+
+    // This function is called by ProcessDeactivationAssetsModal when it's done
+    const handleProcessingComplete = async (success: boolean, processedCount?: number) => {
+        console.log(`Asset processing complete. Success: ${success}, Processed: ${processedCount}`);
+        if (success && employeeToProcess) {
+            setIsDeactivating(true);
+            setSnackbar({ open: true, message: `Обробка активів завершена. Деактивація співробітника...`, severity: 'info' });
+            try {
+                const response = await fetch(`/api/employees/${employeeToProcess.id}`, { method: 'DELETE' });
+                // Використовуємо ApiErrorData при обробці помилки
+                const result: EmployeeDeactivateResponseData | ApiErrorData = await response.json();
+
+                if (!response.ok) {
+                    // Тепер message точно існує в ApiErrorData
+                    throw new Error((result as ApiErrorData).message || `HTTP error! status: ${response.status}`);
+                }
+
+                mutate('/api/employees', (currentData: EmployeeApiResponse[] = []) => {
+                    return currentData.filter(emp => emp && emp.id !== employeeToProcess.id);
+                }, false);
+
+                setSnackbar({ open: true, message: `Співробітника "${employeeToProcess.full_name}" успішно деактивовано.`, severity: 'success' });
+
+            } catch (err) {
+                console.error('Error during employee deactivation:', err);
+                setSnackbar({ open: true, message: `Помилка деактивації співробітника: ${err instanceof Error ? err.message : 'Невідома помилка'}`, severity: 'error' });
+            } finally {
+                setIsDeactivating(false);
+                setEmployeeToProcess(null);
+            }
+        } else if (!success) {
+             setSnackbar({ open: true, message: 'Не вдалося обробити активи. Деактивацію скасовано.', severity: 'error' });
+             setEmployeeToProcess(null);
+        } else {
+             console.error("Processing complete but employeeToProcess is null.");
+             setEmployeeToProcess(null);
+        }
+    };
+
+
+     // --- Snackbar Close Handler ---
      const handleCloseSnackbar = (event?: React.SyntheticEvent | Event, reason?: string) => {
         if (reason === 'clickaway') return;
         setSnackbar(null);
@@ -251,26 +280,23 @@ export default function EmployeesPage() {
                     <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
                     <ListItemText>Редагувати</ListItemText>
                 </MenuItem>
-                <MenuItem onClick={handleDelete} sx={{ color: 'error.main' }}>
-                    <ListItemIcon><DeleteIcon fontSize="small" sx={{ color: 'error.main' }} /></ListItemIcon>
-                    <ListItemText>Деактивувати</ListItemText>
+                <MenuItem onClick={handleOpenProcessAssetsModal} sx={{ color: 'warning.main' }}>
+                    <ListItemIcon><DeleteIcon fontSize="small" sx={{ color: 'warning.main' }} /></ListItemIcon>
+                    <ListItemText>Деактивувати (Звільнити)</ListItemText>
                 </MenuItem>
             </Menu>
 
             {/* --- Modals --- */}
-            {employeeToEdit && (
-                <EditEmployeeModal
-                    open={editModalOpen}
-                    onClose={handleCloseEditModal}
-                    employee={employeeToEdit}
-                    onSubmitSuccess={handleEditSuccess}
-                />
-            )}
-            <AddEmployeeModal
-                open={addModalOpen}
-                onClose={handleCloseAddModal}
-                onSubmitSuccess={handleAddSuccess}
+            {employeeToEdit && ( <EditEmployeeModal open={editModalOpen} onClose={handleCloseEditModal} employee={employeeToEdit} onSubmitSuccess={handleEditSuccess} /> )}
+            <AddEmployeeModal open={addModalOpen} onClose={handleCloseAddModal} onSubmitSuccess={handleAddSuccess} />
+            <ProcessDeactivationAssetsModal
+                open={processAssetsModalOpen}
+                onClose={handleCloseProcessAssetsModal}
+                employeeId={employeeToProcess?.id ?? null}
+                employeeName={employeeToProcess?.full_name || ''}
+                onProcessingComplete={handleProcessingComplete}
             />
+
             {/* --- Snackbar --- */}
             {snackbar && (
                 <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>

@@ -34,10 +34,9 @@ type EmployeeDeactivateResponseData = {
 };
 
 // Тип для помилки
-type ApiErrorData = { message: string };
+type ApiErrorData = { message: string; details?: any }; // Додано details
 
 // --- Оновлений тип для NextApiResponse ---
-// Включає всі можливі успішні відповіді та помилку
 type ApiResponse =
     | EmployeeDetailsData
     | EmployeeUpdateResponseData
@@ -47,13 +46,12 @@ type ApiResponse =
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<ApiResponse> // <--- Використовуємо оновлений тип відповіді
+  res: NextApiResponse<ApiResponse>
 ) {
   const { id } = req.query;
 
   // Validate ID
   if (typeof id !== 'string' || isNaN(parseInt(id))) {
-    // Перевіряємо res перед відправкою помилки
     if (!res) return console.error("Response object undefined before sending ID validation error!");
     return res.status(400).json({ message: 'Invalid employee ID format.' });
   }
@@ -64,14 +62,9 @@ export default async function handler(
     try {
       const employee = await prisma.employee.findUnique({
         where: { id: employeeId },
-        select: { // Select fields for EmployeeDetailsData
-          id: true,
-          full_name: true,
-          position: true,
-          contact_info: true,
-          is_active: true,
-          is_responsible: true,
-          created_at: true,
+        select: {
+          id: true, full_name: true, position: true, contact_info: true,
+          is_active: true, is_responsible: true, created_at: true,
         },
       });
 
@@ -81,15 +74,14 @@ export default async function handler(
       }
 
       if (!res) return console.error("Response object undefined before sending GET success response!");
-      // Відповідь відповідає EmployeeDetailsData
       res.status(200).json(employee);
 
     } catch (error) {
       console.error(`Failed to fetch employee ${employeeId}:`, error);
       if (!res) return console.error("Response object undefined before sending GET error response!");
-      res.status(500).json({ message: 'Internal Server Error' });
+      res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) }); // Додано details
     } finally {
-      await prisma.$disconnect();
+      // Disconnect moved to the end
     }
   }
   // --- Handle PUT request (from EditEmployeeModal) ---
@@ -116,12 +108,10 @@ export default async function handler(
         const updatedEmployee = await prisma.employee.update({
           where: { id: employeeId },
           data: updateData,
-          // Select fields for EmployeeUpdateResponseData
           select: { id: true, full_name: true, position: true, contact_info: true, is_active: true, is_responsible: true },
         });
 
         if (!res) return console.error("Response object undefined before sending PUT success response!");
-        // Відповідь відповідає EmployeeUpdateResponseData
         res.status(200).json(updatedEmployee);
 
       } catch (error) {
@@ -135,49 +125,63 @@ export default async function handler(
             return res.status(409).json({ message: `Update failed: An employee with this ${field} already exists.` });
           }
         }
-        res.status(500).json({ message: 'Internal Server Error' });
-      } finally { await prisma.$disconnect(); }
+        res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) }); // Додано details
+      } finally {
+        // Disconnect moved to the end
+      }
   }
-  // --- Handle DELETE request (Logical Delete) ---
+  // --- Handle DELETE request (Logical Delete - ONLY Employee) ---
   else if (req.method === 'DELETE') {
        try {
-            const employeeToDeactivate = await prisma.employee.findUnique({ where: { id: employeeId }, select: { is_active: true } });
+            // 1. Перевіряємо, чи існує співробітник
+            const employeeToDeactivate = await prisma.employee.findUnique({
+                where: { id: employeeId },
+                select: { id: true } // Достатньо перевірити існування
+            });
+
             if (!employeeToDeactivate) {
                 if (!res) return console.error("Response object undefined before sending DELETE 404 error!");
                 return res.status(404).json({ message: `Employee with ID ${employeeId} not found.` });
             }
 
+            // 2. Оновлюємо ТІЛЬКИ статус співробітника
             const deactivatedEmployee = await prisma.employee.update({
                 where: { id: employeeId },
-                data: { is_active: false, is_responsible: false },
-                 // Select fields for EmployeeDeactivateResponseData
-                 select: { id: true, is_active: true },
+                data: {
+                    is_active: false,
+                    is_responsible: false, // Зазвичай, неактивний співробітник не може бути відповідальним
+                },
+                 select: { id: true, is_active: true }, // Повертаємо підтвердження
             });
 
-            // Unassign assets logic...
-            const assignedAssets = await prisma.assetInstance.findMany({ where: { current_employee_id: employeeId }, select: { id: true } });
-            if (assignedAssets.length > 0) {
-                const assetIds = assignedAssets.map(a => a.id);
-                await prisma.assetInstance.updateMany({
-                    where: { id: { in: assetIds } },
-                    data: { current_employee_id: null, status: 'on_stock' } // Assuming AssetStatus enum is used or 'on_stock' string
-                });
-                 console.log(`Unassigned ${assetIds.length} assets from deactivated employee ${employeeId}`);
-                 // TODO: Add logic to update/create assignment history records for returned assets
-            }
+            // *** ВИДАЛЕНО ЛОГІКУ ОНОВЛЕННЯ AssetInstance ***
+            // const assignedAssets = await prisma.assetInstance.findMany({ where: { current_employee_id: employeeId }, select: { id: true } });
+            // if (assignedAssets.length > 0) {
+            //     const assetIds = assignedAssets.map(a => a.id);
+            //     await prisma.assetInstance.updateMany({
+            //         where: { id: { in: assetIds } },
+            //         data: { current_employee_id: null, status: 'on_stock' }
+            //     });
+            //      console.log(`Unassigned ${assetIds.length} assets from deactivated employee ${employeeId}`);
+            //      // TODO: Add logic to update/create assignment history records for returned assets
+            // }
+
+            console.log(`Deactivated employee ${employeeId}. Asset processing moved to separate step.`);
 
             if (!res) return console.error("Response object undefined before sending DELETE success response!");
-            // Відповідь відповідає EmployeeDeactivateResponseData
             res.status(200).json(deactivatedEmployee);
 
        } catch (error) {
             console.error(`Failed to deactivate employee ${employeeId}:`, error);
              if (!res) return console.error("Response object undefined before sending DELETE error response!");
             if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-                return res.status(404).json({ message: `Employee with ID ${employeeId} not found during deactivation.` });
+                // Ця помилка тепер може виникнути, якщо співробітника видалили між findUnique та update
+                return res.status(404).json({ message: `Employee with ID ${employeeId} not found during deactivation attempt.` });
             }
-            res.status(500).json({ message: 'Internal Server Error' });
-       } finally { await prisma.$disconnect(); }
+            res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) }); // Додано details
+       } finally {
+            // Disconnect moved to the end
+       }
   }
   // --- Handle other methods ---
   else {
@@ -188,4 +192,9 @@ export default async function handler(
         console.error('FATAL: Response object is undefined in the final else block for [id] route!');
     }
   }
+
+   // Disconnect Prisma Client finally after handling request
+   if (prisma) {
+       await prisma.$disconnect().catch((e: unknown) => console.error("Failed to disconnect Prisma Client:", e));
+   }
 }
