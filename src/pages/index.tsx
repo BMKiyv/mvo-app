@@ -7,7 +7,7 @@ import useSWR from 'swr';
 // MUI Components
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import Grid from '@mui/material/Grid'; // Keep Grid for layout flexibility if needed later
+// import Grid from '@mui/material/Grid'; // Grid is not used for main layout here
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import CardHeader from '@mui/material/CardHeader';
@@ -36,20 +36,11 @@ const fetcher = (url: string) => fetch(url).then((res) => {
     if (!res.ok) {
         const error = new Error('An error occurred while fetching the data.');
         (error as any).status = res.status;
-        // Try to get error message from response body
-        return res.json().then(info => {
-            (error as any).info = info; // Attach detailed error info if available
-            throw error;
-        }).catch(() => {
-            // If response body is not JSON or empty, throw the original error
-            throw error;
-        });
+        return res.json().then(info => { (error as any).info = info; throw error; })
+                         .catch(() => { throw error; });
     }
-    // Handle empty response body for potentially null results
-     if (res.status === 204 || res.headers.get('content-length') === '0') {
-        return null; // Return null for empty responses
-     }
-    return res.json(); // Parse JSON body for successful responses
+    if (res.status === 204 || res.headers.get('content-length') === '0') return null;
+    return res.json();
 });
 
 // --- Define expected data types from the API ---
@@ -61,8 +52,9 @@ type LowStockItem = {
   currentStock: number;
 };
 
+// Type RecentActivity with the correct field name 'activityType'
 type RecentActivity = {
-  type: 'assigned' | 'returned' | 'written_off'; // Updated type name from API
+  activityType: 'assigned' | 'returned' | 'written_off'; // Correct field name
   date: string; // API returns date as string
   employeeFullName: string | null;
   assetTypeName: string | null;
@@ -80,20 +72,19 @@ type DashboardData = {
 const formatDate = (dateString: string): string => {
     try {
         const date = new Date(dateString);
-         // Use Ukraine locale for formatting
         return date.toLocaleString('uk-UA', {
             day: '2-digit', month: '2-digit', year: 'numeric',
             hour: '2-digit', minute: '2-digit'
         });
     } catch (e) {
         console.error("Failed to format date:", dateString, e);
-        return dateString; // Return original string if parsing fails
+        return dateString;
     }
 };
 
 // Helper to get icon based on activity type
-const getActivityIcon = (type: RecentActivity['type']) => { // Use updated type name
-    switch (type) {
+const getActivityIcon = (type: RecentActivity['activityType']) => { // Parameter name is 'type'
+    switch (type) { // Use the parameter 'type' here
         case 'assigned': return <AssignmentIndIcon color="primary" fontSize="small"/>;
         case 'returned': return <KeyboardReturnIcon color="success" fontSize="small"/>;
         case 'written_off': return <DeleteForeverIcon color="error" fontSize="small"/>;
@@ -105,7 +96,7 @@ const getActivityIcon = (type: RecentActivity['type']) => { // Use updated type 
 const getActivityDescription = (activity: RecentActivity): React.ReactNode => {
     const assetInfo = (
         <Tooltip title={`ID Екземпляра: ${activity.assetInstanceId}`}>
-            {/* Make inventory number clickable if possible */}
+            {/* TODO: Create page /inventory/instance/[id] */}
              <NextLink href={`/inventory/instance/${activity.assetInstanceId}`} passHref legacyBehavior>
                  <Link component="span" sx={{ fontWeight: 500 }} underline="hover" color="inherit">
                     {activity.assetTypeName || 'Невідомий тип'} ({activity.inventoryNumber || 'N/A'})
@@ -113,44 +104,59 @@ const getActivityDescription = (activity: RecentActivity): React.ReactNode => {
              </NextLink>
         </Tooltip>
     );
+     // TODO: Need employee ID from API to make this a link
      const employeeInfo = activity.employeeFullName ? (
-         <NextLink href={`/employees/${/* Need employee ID here if available */ ''}`} passHref legacyBehavior>
-             <Link component="span" sx={{ fontWeight: 'bold' }} underline="hover" color="inherit">
-                 {activity.employeeFullName}
-             </Link>
-         </NextLink>
+         <span style={{ fontWeight: 'bold' }}>{activity.employeeFullName}</span>
+        // <NextLink href={`/employees/${/* employee ID needed here */ ''}`} passHref legacyBehavior>
+        //     <Link component="span" sx={{ fontWeight: 'bold' }} underline="hover" color="inherit">
+        //         {activity.employeeFullName}
+        //     </Link>
+        // </NextLink>
      ) : 'N/A';
 
-
-    switch (activity.type) { // Use updated type name
+    // Use activity.activityType in the switch statement
+    switch (activity.activityType) {
         case 'assigned': return <>Видано {assetInfo} співробітнику {employeeInfo}</>;
         case 'returned': return <>Повернено {assetInfo} від {employeeInfo}</>;
         case 'written_off': return <>Списано {assetInfo}</>;
-        default: return 'Невідома дія';
+        default:
+             // Log the unexpected type value
+             console.warn("Unknown activity type received in getActivityDescription:", `"${activity.activityType}"`, activity);
+             return 'Невідома дія'; // Default text
     }
 };
 
 
 export default function DashboardPage() {
-  // Fetch dashboard data using SWR
   const { data: dashboardData, error, isLoading } = useSWR<DashboardData>(
-      '/api/dashboard/summary', // API endpoint URL
-      fetcher, // The function to fetch the data
-      { refreshInterval: 300000 } // Optional: Refresh data every 5 minutes
+      '/api/dashboard/summary',
+      fetcher,
+      { refreshInterval: 300000 }
   );
 
     // Function to render the error message more clearly
-  const renderErrorMessage = () => {
-      let message = 'Перевірте з\'єднання або спробуйте пізніше.'; // Default message
+  const renderErrorMessage = (error: any) => { // Pass error object
+      let message = 'Перевірте з\'єднання або спробуйте пізніше.';
       if (error) {
           if ((error as any).info?.message) {
-              message = (error as any).info.message; // Use message from API if available
+              message = (error as any).info.message;
           } else if (error.message) {
-              message = error.message; // Use generic error message
+              message = error.message;
           }
       }
       return message;
   };
+
+
+  // Log received data when it changes
+  React.useEffect(() => {
+      if (dashboardData?.recentActivities) {
+          console.log("Received Recent Activities Data:", JSON.stringify(dashboardData.recentActivities, null, 2)); // Pretty print JSON
+      }
+       if (error) {
+           console.error("Dashboard fetch error:", error);
+       }
+  }, [dashboardData, error]);
 
 
   return (
@@ -167,11 +173,11 @@ export default function DashboardPage() {
       )}
 
       {/* --- Error State --- */}
-      {error && !isLoading && ( // Show error only if not loading
+      {error && !isLoading && (
         <Alert severity="error" sx={{ mb: 3 }}>
           Не вдалося завантажити дані для дашборду.
           <Typography variant="caption" display="block">
-             {renderErrorMessage()}
+             {renderErrorMessage(error)} {/* Pass error to helper */}
           </Typography>
         </Alert>
       )}
@@ -179,18 +185,11 @@ export default function DashboardPage() {
 
       {/* --- Data Display --- */}
       {!isLoading && !error && dashboardData && (
-        // Using Box with Flexbox for layout
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: { xs: 'column', md: 'row' }, // Stack on small screens, row on medium+
-            gap: 3, // Spacing between items
-          }}
-        >
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 3, }}>
           {/* --- First Flex Item (Low Stock Card) --- */}
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Card elevation={3} sx={{ height: '100%' }}>
-              <CardHeader
+             <Card elevation={3} sx={{ height: '100%' }}>
+               <CardHeader
                 avatar={<WarningAmberIcon color="warning" />}
                 title="Низький Залишок на Складі"
                 slotProps={{ title: { variant: 'h6' } }}
@@ -207,7 +206,6 @@ export default function DashboardPage() {
                       <ListItem key={item.assetTypeId} disableGutters divider>
                         <ListItemText
                           primary={
-                            // Link to inventory page filtered by type (adjust URL if needed)
                             <NextLink href={`/inventory?typeId=${item.assetTypeId}`} passHref legacyBehavior>
                                 <Link underline="hover" color="inherit" sx={{cursor: 'pointer'}}>
                                     {item.assetTypeName}
@@ -228,7 +226,7 @@ export default function DashboardPage() {
                 )}
               </CardContent>
             </Card>
-          </Box> {/* End First Flex Item */}
+          </Box>
 
           {/* --- Second Flex Item (Recent Activities Card) --- */}
           <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -245,22 +243,25 @@ export default function DashboardPage() {
                     Немає нещодавніх дій.
                   </Typography>
                 ) : (
-                  // Display the list of recent activities
                   <List dense>
-                    {/* Use activity.keySource for React key */}
-                    {dashboardData.recentActivities.map((activity) => (
-                      <ListItem key={activity.keySource} disableGutters divider>
-                        <ListItemIcon sx={{ minWidth: 32, mt: 0.5, alignSelf: 'flex-start' }}> {/* Align icon top */}
-                          {getActivityIcon(activity.type)}
-                        </ListItemIcon>
-                        <ListItemText
-                          primary={getActivityDescription(activity)}
-                          secondary={formatDate(activity.date)} // Format date
-                           primaryTypographyProps={{ variant: 'body2' }}
-                           secondaryTypographyProps={{ variant: 'caption', color: 'text.secondary' }}
-                        />
-                      </ListItem>
-                    ))}
+                    {dashboardData.recentActivities.map((activity) => {
+                        // console.log("Processing activity:", activity.activityType, activity); // Optional detailed log
+                        return (
+                          <ListItem key={activity.keySource} disableGutters divider>
+                            <ListItemIcon sx={{ minWidth: 32, mt: 0.5, alignSelf: 'flex-start' }}>
+                              {/* Pass activityType to the helper */}
+                              {getActivityIcon(activity.activityType)}
+                            </ListItemIcon>
+                            <ListItemText
+                              // Pass the whole activity object to the helper
+                              primary={getActivityDescription(activity)}
+                              secondary={formatDate(activity.date)}
+                               primaryTypographyProps={{ variant: 'body2' }}
+                               secondaryTypographyProps={{ variant: 'caption', color: 'text.secondary' }}
+                            />
+                          </ListItem>
+                        );
+                    })}
                   </List>
                 )}
               </CardContent>

@@ -4,6 +4,7 @@
 import * as React from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { useRouter } from 'next/router'; // Import useRouter for navigation
+// Переконайтесь, що шляхи до модальних вікон правильні
 import AddEmployeeModal from '@/components/AddEmployeeModal';
 import EditEmployeeModal from '@/components/EditEmployeeModal';
 
@@ -66,7 +67,7 @@ export default function EmployeesPage() {
     const [selectedEmployeeForMenu, setSelectedEmployeeForMenu] = React.useState<EmployeeApiResponse | null>(null);
     const menuOpen = Boolean(anchorEl);
 
-    // --- State for Edit Modal ---
+    // --- State for Modals ---
     const [editModalOpen, setEditModalOpen] = React.useState(false);
     const [addModalOpen, setAddModalOpen] = React.useState(false);
     const [employeeToEdit, setEmployeeToEdit] = React.useState<EmployeeApiResponse | null>(null);
@@ -77,121 +78,127 @@ export default function EmployeesPage() {
 
     // --- Handlers for Action Menu ---
     const handleMenuClick = (event: React.MouseEvent<HTMLElement>, employee: EmployeeApiResponse) => {
+        console.log("Menu clicked for:", employee);
         setAnchorEl(event.currentTarget);
         setSelectedEmployeeForMenu(employee);
     };
     const handleMenuClose = () => {
         setAnchorEl(null);
-        setSelectedEmployeeForMenu(null);
+        // Don't clear selectedEmployeeForMenu here immediately
     };
 
     // --- Handler for View Action ---
     const handleViewDetails = () => {
-        if (selectedEmployeeForMenu) {
-            router.push(`/employees/${selectedEmployeeForMenu.id}`); // Navigate to details page
+        console.log("handleViewDetails called.");
+        console.log("Current selectedEmployeeForMenu:", selectedEmployeeForMenu);
+
+        if (selectedEmployeeForMenu && typeof selectedEmployeeForMenu.id === 'number') {
+            const targetUrl = `/employees/${selectedEmployeeForMenu.id}`;
+            console.log("Attempting to navigate to:", targetUrl);
+            router.push(targetUrl)
+                .then((success) => {
+                    if (success) { console.log("Navigation successful!"); }
+                    else { console.warn("Navigation returned false, possibly interrupted."); }
+                })
+                .catch(err => {
+                    console.error("Navigation error in router.push:", err);
+                    setSnackbar({ open: true, message: `Помилка переходу: ${err.message}`, severity: 'error' });
+                });
+        } else {
+            console.error("Cannot navigate: selectedEmployeeForMenu or its ID is invalid.", selectedEmployeeForMenu);
+            setSnackbar({ open: true, message: 'Не вдалося отримати ID співробітника для перегляду.', severity: 'error' });
         }
-        handleMenuClose(); // Close menu after navigation starts
+        // Close menu AFTER navigation attempt
+        setAnchorEl(null);
+        setSelectedEmployeeForMenu(null); // Clear selection here
     };
 
-    // --- Handlers for Modal ---
+    // --- Handlers for Edit Modal ---
     const handleOpenEditModal = () => {
         if (selectedEmployeeForMenu) {
             setEmployeeToEdit(selectedEmployeeForMenu);
             setEditModalOpen(true);
+        } else {
+             console.error("Cannot open Edit Modal: selectedEmployeeForMenu is null.");
         }
-        handleMenuClose();
+        handleMenuClose(); // Close the menu itself
     };
+    // *** ВИДАЛЕНО ЗАГЛУШКИ ЗВІДСИ ***
 
-    const handleCloseEditModal = () => {
+    // --- Re-add implementations for handlers (ЗАЛИШЕНО ТІЛЬКИ РЕАЛІЗАЦІЇ) ---
+     const handleCloseEditModal = () => {
         setEditModalOpen(false);
         setEmployeeToEdit(null);
-    };
-
-    // --- Handler for Successful Edit ---
-    const handleEditSuccess = (updatedEmployee: EmployeeApiResponse) => {
-        mutate('/api/employees', (currentData: EmployeeApiResponse[] | undefined) => {
-            if (!currentData) return [];
+     };
+     const handleEditSuccess = (updatedEmployee: EmployeeApiResponse) => {
+        mutate('/api/employees', (currentData: EmployeeApiResponse[] = []) => {
+            if (!updatedEmployee?.id) return currentData;
             return currentData.map(emp => emp.id === updatedEmployee.id ? updatedEmployee : emp);
         }, false);
-
-        setSnackbar({ open: true, message: 'Дані співробітника оновлено!', severity: 'success' });
-    };
-
-    // --- Handlers for Add Modal --- // 
-    const handleOpenAddModal = () => {
+        setSnackbar({ open: true, message: `Дані співробітника ${updatedEmployee?.full_name || ''} оновлено!`, severity: 'success' });
+     };
+     const handleOpenAddModal = () => {
         setAddModalOpen(true);
-    };
-
-    const handleCloseAddModal = () => {
+     };
+     const handleCloseAddModal = () => {
         setAddModalOpen(false);
-    };
-
-    const handleAddSuccess = (newEmployee: EmployeeApiResponse) => {
-        // Update SWR cache by adding the new employee to the list
+     };
+     const handleAddSuccess = (newEmployee: EmployeeApiResponse) => {
+        if (!newEmployee || !newEmployee.full_name) {
+            console.error("handleAddSuccess received invalid newEmployee:", newEmployee);
+            setSnackbar({ open: true, message: 'Помилка оновлення списку після додавання.', severity: 'error' });
+            mutate('/api/employees');
+            return;
+        }
         mutate('/api/employees', (currentData: EmployeeApiResponse[] = []) => {
-            // Add new employee and re-sort the list alphabetically by full name
-            return [...currentData, newEmployee].sort((a, b) => a.full_name.localeCompare(b.full_name));
-        }, false); // Use 'false' for optimistic update without immediate revalidation
+            const validData = currentData.filter(emp => emp && emp.full_name);
+            const updatedData = [...validData, newEmployee];
+            return updatedData.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
+        }, false);
         setSnackbar({ open: true, message: `Співробітника "${newEmployee.full_name}" успішно додано!`, severity: 'success' });
-        // Modal is closed by AddEmployeeModal itself on success
-    };
-
-
-    // --- Placeholder for Add Employee ---
-    const handleAddEmployee = () => {
-        console.log("Open Add Employee Modal");
-        setSnackbar({ open: true, message: 'Функція додавання ще не реалізована.', severity: 'info' });
-    };
-
-    // --- Delete Handler ---
-    const handleDelete = async () => {
+     };
+     const handleDelete = async () => {
         const employeeToDelete = selectedEmployeeForMenu;
-        handleMenuClose();
+        setAnchorEl(null); // Close menu immediately
 
         if (employeeToDelete) {
-            const confirmed = confirm(`Ви впевнені, що хочете деактивувати співробітника ${employeeToDelete.full_name}? Активи будуть повернуті на склад.`);
-            if (confirmed) {
-                try {
-                    const response = await fetch(`/api/employees/${employeeToDelete.id}`, { method: 'DELETE' });
-                    if (!response.ok) {
-                        const errorData = await response.json();
-                        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-                    }
-                    mutate('/api/employees', (currentData: EmployeeApiResponse[] | undefined) => {
-                        if (!currentData) return [];
-                        return currentData.filter(emp => emp.id !== employeeToDelete.id);
-                    }, false);
-                    setSnackbar({ open: true, message: 'Співробітника деактивовано.', severity: 'success' });
-                } catch (err) {
-                    console.error('Error during delete request:', err);
-                    setSnackbar({ open: true, message: `Помилка видалення: ${err instanceof Error ? err.message : 'Невідома помилка'}`, severity: 'error' });
-                }
-            }
+          const confirmed = confirm(`Ви впевнені, що хочете деактивувати співробітника ${employeeToDelete.full_name}? Активи будуть повернуті на склад.`);
+          if (confirmed) {
+              try {
+                  const response = await fetch(`/api/employees/${employeeToDelete.id}`, { method: 'DELETE' });
+                  if (!response.ok) {
+                      const errorData = await response.json();
+                      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+                  }
+                  mutate('/api/employees', (currentData: EmployeeApiResponse[] = []) => {
+                       return currentData.filter(emp => emp && emp.id !== employeeToDelete.id);
+                  }, false);
+                  setSnackbar({ open: true, message: 'Співробітника деактивовано.', severity: 'success' });
+              } catch (err) {
+                  console.error('Error during delete request:', err);
+                   setSnackbar({ open: true, message: `Помилка видалення: ${err instanceof Error ? err.message : 'Невідома помилка'}`, severity: 'error' });
+              }
+          }
+        } else {
+             console.error("Delete failed: selectedEmployeeForMenu was null");
         }
-    };
-
-    // --- Snackbar Close Handler ---
-    const handleCloseSnackbar = (event?: React.SyntheticEvent | Event, reason?: string) => {
+        setSelectedEmployeeForMenu(null); // Clear selection after operations
+     };
+     const handleCloseSnackbar = (event?: React.SyntheticEvent | Event, reason?: string) => {
         if (reason === 'clickaway') return;
         setSnackbar(null);
-    };
+     };
 
 
     // --- Render Logic ---
     return (
         <Box>
             {/* --- Page Header --- */}
-            {/* --- Page Header --- */}
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
                 <Typography variant="h4" component="h1">
                     Співробітники
                 </Typography>
-                {/* Attach handler to Add button */}
-                <Button
-                    variant="contained"
-                    startIcon={<AddIcon />}
-                    onClick={handleOpenAddModal} // <--- ЗМІНІТЬ ЦЕЙ РЯДОК
-                >
+                <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenAddModal}>
                     Додати Співробітника
                 </Button>
             </Box>
@@ -216,12 +223,9 @@ export default function EmployeesPage() {
                             {employees.length === 0 ? (
                                 <TableRow><TableCell colSpan={4} align="center">Активних співробітників не знайдено.</TableCell></TableRow>
                             ) : (
-                                employees.map((employee) => (
+                                employees.filter(emp => emp && emp.id).map((employee) => (
                                     <TableRow key={employee.id} hover>
-                                        {/* Name is now plain text */}
-                                        <TableCell component="th" scope="row">
-                                            {employee.full_name}
-                                        </TableCell>
+                                        <TableCell component="th" scope="row">{employee.full_name}</TableCell>
                                         <TableCell>{employee.position ?? 'N/A'}</TableCell>
                                         <TableCell>{employee.contact_info ?? 'N/A'}</TableCell>
                                         <TableCell align="right">
@@ -239,24 +243,21 @@ export default function EmployeesPage() {
 
             {/* --- Action Menu --- */}
             <Menu anchorEl={anchorEl} open={menuOpen} onClose={handleMenuClose}>
-                {/* View Action - NEW */}
                 <MenuItem onClick={handleViewDetails}>
                     <ListItemIcon><VisibilityIcon fontSize="small" /></ListItemIcon>
                     <ListItemText>Переглянути</ListItemText>
                 </MenuItem>
-                {/* Edit Action */}
                 <MenuItem onClick={handleOpenEditModal}>
                     <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
                     <ListItemText>Редагувати</ListItemText>
                 </MenuItem>
-                {/* Delete Action */}
                 <MenuItem onClick={handleDelete} sx={{ color: 'error.main' }}>
                     <ListItemIcon><DeleteIcon fontSize="small" sx={{ color: 'error.main' }} /></ListItemIcon>
                     <ListItemText>Деактивувати</ListItemText>
                 </MenuItem>
             </Menu>
 
-            {/* --- Edit Employee Modal --- */}
+            {/* --- Modals --- */}
             {employeeToEdit && (
                 <EditEmployeeModal
                     open={editModalOpen}
@@ -265,13 +266,12 @@ export default function EmployeesPage() {
                     onSubmitSuccess={handleEditSuccess}
                 />
             )}
-       {/* --- Add Employee Modal --- */} 
-       <AddEmployeeModal
-            open={addModalOpen}
-            onClose={handleCloseAddModal}
-            onSubmitSuccess={handleAddSuccess}
-       />
-            {/* --- Snackbar for Notifications --- */}
+            <AddEmployeeModal
+                open={addModalOpen}
+                onClose={handleCloseAddModal}
+                onSubmitSuccess={handleAddSuccess}
+            />
+            {/* --- Snackbar --- */}
             {snackbar && (
                 <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
                     <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>

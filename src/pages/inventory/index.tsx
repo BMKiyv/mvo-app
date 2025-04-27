@@ -3,7 +3,7 @@
 
 import * as React from 'react';
 import useSWR, { useSWRConfig } from 'swr';
-import { useRouter } from 'next/router'; // Import router to read/write query params
+import { useRouter } from 'next/router';
 
 // MUI Components
 import Box from '@mui/material/Box';
@@ -11,8 +11,9 @@ import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
-import DeleteIcon from '@mui/icons-material/DeleteOutline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import PlaylistAddIcon from '@mui/icons-material/PlaylistAdd';
+import CategoryIcon from '@mui/icons-material/Category';
 import IconButton from '@mui/material/IconButton';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
@@ -30,13 +31,18 @@ import TableRow from '@mui/material/TableRow';
 import Select, { SelectChangeEvent } from '@mui/material/Select';
 import FormControl from '@mui/material/FormControl';
 import InputLabel from '@mui/material/InputLabel';
-import Chip from '@mui/material/Chip'; // To show stock status
+import Chip from '@mui/material/Chip';
 import Tooltip from '@mui/material/Tooltip';
 import Snackbar from '@mui/material/Snackbar';
+import Divider from '@mui/material/Divider';
+import NextLink from 'next/link';
+import FormHelperText from '@mui/material/FormHelperText';
 
-// Import Modal components (placeholders for now)
-// import AddAssetTypeModal from '../../components/AddAssetTypeModal';
-// import EditAssetTypeModal from '../../components/EditAssetTypeModal';
+// Import Modal components
+import AddAssetTypeModal from '../../components/AddAssetTypeModal';
+import EditAssetTypeModal from '../../components/EditAssetTypeModal';
+import AddAssetInstanceModal from '../../components/AddAssetInstanceModal';
+import AddCategoryModal from '../../components/AddCategoryModal'; // Import Add Category Modal
 
 // --- Fetcher function ---
 const fetcher = (url: string) => fetch(url).then((res) => {
@@ -50,69 +56,51 @@ const fetcher = (url: string) => fetch(url).then((res) => {
 });
 
 // --- Types ---
-type AssetCategoryOption = {
-  id: number;
-  name: string;
-};
-
+type AssetCategoryOption = { id: number; name: string; };
 type AssetTypeWithCounts = {
-  id: number;
-  name: string;
-  minimum_stock_level: number | null;
-  notes: string | null;
-  categoryId: number;
-  categoryName: string | null;
-  totalQuantity: number;
-  onStockQuantity: number;
-  createdAt: string; // Date comes as string
+  id: number; name: string; minimum_stock_level: number | null; notes: string | null;
+  categoryId: number; categoryName: string | null; totalQuantity: number;
+  onStockQuantity: number; createdAt: string;
 };
+type AssetTypeApiResponse = {
+    id: number; name: string; categoryId: number;
+    minimum_stock_level: number | null; notes: string | null;
+};
+type AssetInstanceApiResponse = { id: number; /* ... інші поля ... */ };
+type CategoryApiResponse = { id: number; name: string; /* ... */ };
+
 
 // --- Inventory Page Component ---
 export default function InventoryPage() {
   const router = useRouter();
   const { mutate } = useSWRConfig();
 
-  // State for category filter - read initial value from router query
-  const [selectedCategoryId, setSelectedCategoryId] = React.useState<string>(
-      (router.query.categoryId as string) || '' // Initialize from URL query param or empty
-  );
-
-  // State for action menu
+  // States...
+  const [selectedCategoryId, setSelectedCategoryId] = React.useState<string>((router.query.categoryId as string) || '');
   const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
   const [selectedAssetType, setSelectedAssetType] = React.useState<AssetTypeWithCounts | null>(null);
   const menuOpen = Boolean(anchorEl);
+  const [addTypeModalOpen, setAddTypeModalOpen] = React.useState(false);
+  const [editTypeModalOpen, setEditTypeModalOpen] = React.useState(false);
+  const [assetTypeToEdit, setAssetTypeToEdit] = React.useState<AssetTypeWithCounts | null>(null);
+  const [addInstanceModalOpen, setAddInstanceModalOpen] = React.useState(false);
+  const [assetTypeForInstance, setAssetTypeForInstance] = React.useState<{id: number; name: string} | null>(null);
+  const [addCategoryModalOpen, setAddCategoryModalOpen] = React.useState(false); // State for Add Category Modal
 
-  // State for modals (placeholders)
-  const [addModalOpen, setAddModalOpen] = React.useState(false);
-  const [editModalOpen, setEditModalOpen] = React.useState(false);
-
-  // State for Snackbar
   const [snackbar, setSnackbar] = React.useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' } | null>(null);
 
 
   // --- Data Fetching ---
-  // Fetch categories for the filter dropdown
-  const { data: categories, error: categoriesError } = useSWR<AssetCategoryOption[]>('/api/asset-categories', fetcher);
-
-  // Construct the URL for asset types based on the selected category
-  const assetTypesUrl = selectedCategoryId
-    ? `/api/asset-types?categoryId=${selectedCategoryId}`
-    : '/api/asset-types'; // Fetch all if no category selected
-
-  // Fetch asset types based on the URL
-  const { data: assetTypes, error: assetTypesError, isLoading: isLoadingAssetTypes } = useSWR<AssetTypeWithCounts[]>(
-      assetTypesUrl, // URL depends on selectedCategoryId
-      fetcher
-  );
+  const categoriesUrl = '/api/asset-categories';
+  const { data: categories, error: categoriesError, mutate: mutateCategories } = useSWR<AssetCategoryOption[]>(categoriesUrl, fetcher);
+  const assetTypesUrl = selectedCategoryId ? `/api/asset-types?categoryId=${selectedCategoryId}` : '/api/asset-types';
+  const { data: assetTypes, error: assetTypesError, isLoading: isLoadingAssetTypes } = useSWR<AssetTypeWithCounts[]>(assetTypesUrl, fetcher);
 
   // --- Effects ---
-  // Update state if router query changes (e.g., browser back/forward)
   React.useEffect(() => {
-      if (router.isReady) { // Ensure router is ready before accessing query
+      if (router.isReady) {
           const queryCategoryId = (router.query.categoryId as string) || '';
-          if (queryCategoryId !== selectedCategoryId) {
-              setSelectedCategoryId(queryCategoryId);
-          }
+          if (queryCategoryId !== selectedCategoryId) { setSelectedCategoryId(queryCategoryId); }
       }
   }, [router.query.categoryId, router.isReady, selectedCategoryId]);
 
@@ -121,14 +109,9 @@ export default function InventoryPage() {
   const handleCategoryChange = (event: SelectChangeEvent<string>) => {
     const newCategoryId = event.target.value;
     setSelectedCategoryId(newCategoryId);
-    // Update URL query parameter to reflect filter change
     router.push(
-        {
-            pathname: router.pathname, // Keep current path
-            query: newCategoryId ? { categoryId: newCategoryId } : {}, // Set or remove query param
-        },
-        undefined, // Use 'undefined' for shallow routing if desired, or omit for full navigation
-        { shallow: true } // Use shallow routing to avoid full page reload
+        { pathname: router.pathname, query: newCategoryId ? { categoryId: newCategoryId } : {} },
+        undefined, { shallow: true }
     );
   };
 
@@ -142,70 +125,69 @@ export default function InventoryPage() {
     setSelectedAssetType(null);
   };
 
-  // Placeholder handlers for modal actions
-  const handleOpenAddModal = () => {
-      setAddModalOpen(true);
-      console.log("Open Add Asset Type Modal");
-      setSnackbar({open: true, message: 'Функція додавання типу активу ще не реалізована.', severity: 'info'});
-  };
-  const handleCloseAddModal = () => setAddModalOpen(false);
-  const handleAddSuccess = (/* newAssetType */) => {
-      console.log("Asset type added");
-      mutate(assetTypesUrl); // Revalidate data after adding
-      setSnackbar({open: true, message: 'Тип активу успішно додано!', severity: 'success'});
+  // --- Add Type Modal Handlers ---
+  const handleOpenAddTypeModal = () => { setAddTypeModalOpen(true); };
+  const handleCloseAddTypeModal = () => { setAddTypeModalOpen(false); };
+  const handleAddTypeSuccess = (newAssetType: AssetTypeApiResponse) => {
+      mutate(assetTypesUrl);
+      setSnackbar({open: true, message: `Тип "${newAssetType.name}" успішно додано!`, severity: 'success'});
   };
 
-  const handleOpenEditModal = () => {
+  // --- Edit Type Modal Handlers ---
+  const handleOpenEditTypeModal = () => {
       if (selectedAssetType) {
-          setEditModalOpen(true);
-          console.log("Open Edit Asset Type Modal for:", selectedAssetType.name);
-          setSnackbar({open: true, message: 'Функція редагування типу активу ще не реалізована.', severity: 'info'});
+          setAssetTypeToEdit(selectedAssetType);
+          setEditTypeModalOpen(true);
       }
       handleMenuClose();
   };
-  const handleCloseEditModal = () => setEditModalOpen(false);
-   const handleEditSuccess = (/* updatedAssetType */) => {
-      console.log("Asset type updated");
-      mutate(assetTypesUrl); // Revalidate data after editing
-      setSnackbar({open: true, message: 'Тип активу успішно оновлено!', severity: 'success'});
+  const handleCloseEditTypeModal = () => {
+      setEditTypeModalOpen(false);
+      setAssetTypeToEdit(null);
+  };
+   const handleEditTypeSuccess = (updatedAssetType: AssetTypeApiResponse) => {
+      mutate(assetTypesUrl, (currentData: AssetTypeWithCounts[] = []) => {
+           return currentData.map(at => at.id === updatedAssetType.id ? { ...at, ...updatedAssetType } : at);
+      }, false);
+      setSnackbar({open: true, message: `Тип "${updatedAssetType.name}" успішно оновлено!`, severity: 'success'});
   };
 
-
-  const handleDelete = async () => {
-    const typeToDelete = selectedAssetType;
-    handleMenuClose();
-
-    if (typeToDelete) {
-        // TODO: Implement check if instances exist before deleting category
-        // Example check (requires a dedicated API endpoint or modification):
-        // const canDelete = await checkCanDeleteAssetType(typeToDelete.id);
-        // if (!canDelete) {
-        //    setSnackbar({open: true, message: 'Неможливо видалити тип, доки існують його екземпляри.', severity: 'error'});
-        //    return;
-        // }
-
-        const confirmed = confirm(`Ви впевнені, що хочете видалити тип "${typeToDelete.name}"? Це не можна буде скасувати.`);
-        if (confirmed) {
-            try {
-                // TODO: Implement DELETE /api/asset-types/[id] endpoint
-                // const response = await fetch(`/api/asset-types/${typeToDelete.id}`, { method: 'DELETE' });
-                // if (!response.ok) {
-                //     const errorData = await response.json();
-                //     throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-                // }
-                // mutate(assetTypesUrl, (currentData: AssetTypeWithCounts[] = []) => {
-                //      return currentData.filter(at => at.id !== typeToDelete.id);
-                // }, false);
-                // setSnackbar({ open: true, message: `Тип "${typeToDelete.name}" видалено.`, severity: 'success' });
-                 setSnackbar({ open: true, message: 'Функція видалення типу активу ще не реалізована.', severity: 'info' });
-
-            } catch (err) {
-                console.error('Error during delete request:', err);
-                setSnackbar({ open: true, message: `Помилка видалення: ${err instanceof Error ? err.message : 'Невідома помилка'}`, severity: 'error' });
-            }
+   // --- Add Instance/Batch Modal Handlers ---
+   const handleOpenAddInstanceModal = () => {
+        if (selectedAssetType) {
+            setAssetTypeForInstance({ id: selectedAssetType.id, name: selectedAssetType.name });
+            setAddInstanceModalOpen(true);
+        } else {
+            console.error("Cannot open Add Instance modal: selectedAssetType is null");
+            setSnackbar({open: true, message: 'Спочатку виберіть тип активу з меню.', severity: 'error'});
         }
-    }
-  };
+        handleMenuClose();
+   };
+   const handleCloseAddInstanceModal = () => {
+        setAddInstanceModalOpen(false);
+        setAssetTypeForInstance(null);
+   };
+    const handleAddInstanceSuccess = (newInstance: AssetInstanceApiResponse) => {
+        mutate(assetTypesUrl); // Revalidate asset type list to update counts
+        setSnackbar({open: true, message: 'Партію/екземпляр успішно додано!', severity: 'success'});
+   };
+
+   // --- Add Category Modal Handlers ---
+   const handleOpenAddCategoryModal = () => {
+       setAddCategoryModalOpen(true); // <--- Відкриваємо модал
+       // setSnackbar({open: true, message: 'Функція додавання категорії ще не реалізована.', severity: 'info'}); // <--- ВИДАЛЕНО ЦЕЙ РЯДОК
+       // console.log("Open Add Category Modal");
+   };
+    const handleCloseAddCategoryModal = () => {
+        setAddCategoryModalOpen(false);
+    };
+    const handleAddCategorySuccess = (newCategory: CategoryApiResponse) => { // <--- Тип для нової категорії
+        console.log("Category added:", newCategory);
+        mutateCategories(); // Revalidate categories list
+        setSnackbar({open: true, message: `Категорію "${newCategory.name}" успішно додано!`, severity: 'success'});
+        // Модал закривається сам
+    };
+
 
   const handleCloseSnackbar = (event?: React.SyntheticEvent | Event, reason?: string) => {
     if (reason === 'clickaway') return;
@@ -214,9 +196,7 @@ export default function InventoryPage() {
 
   // Helper to determine stock level status
   const getStockLevelChip = (type: AssetTypeWithCounts) => {
-      if (type.minimum_stock_level === null) {
-          return null; // No chip if minimum level is not set
-      }
+      if (type.minimum_stock_level === null) return null;
       if (type.onStockQuantity < type.minimum_stock_level) {
           return <Chip label="Низький залишок" color="warning" size="small" variant="outlined" />;
       }
@@ -234,7 +214,8 @@ export default function InventoryPage() {
         <Typography variant="h4" component="h1">
           Інвентар (Типи Активів)
         </Typography>
-        <Box sx={{ display: 'flex', gap: 2, width: { xs: '100%', sm: 'auto'} }}>
+        {/* --- Buttons Group --- */}
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, width: { xs: '100%', sm: 'auto'} }}>
           {/* Category Filter */}
           <FormControl sx={{ minWidth: 200, width: { xs: '100%', sm: 'auto'} }} size="small">
             <InputLabel id="category-filter-label">Фільтр за категорією</InputLabel>
@@ -243,27 +224,26 @@ export default function InventoryPage() {
               value={selectedCategoryId}
               label="Фільтр за категорією"
               onChange={handleCategoryChange}
-              disabled={!!categoriesError || !categories} // Disable if categories loading/error
+              disabled={!!categoriesError || !categories}
             >
-              <MenuItem value="">
-                <em>Всі категорії</em>
-              </MenuItem>
+              <MenuItem value=""><em>Всі категорії</em></MenuItem>
               {categoriesError && <MenuItem disabled sx={{color: 'error.main'}}>Помилка завантаження</MenuItem>}
               {!categoriesError && !categories && <MenuItem disabled><CircularProgress size={20} sx={{mx: 'auto', display: 'block'}}/></MenuItem>}
-              {categories?.map((cat) => (
-                <MenuItem key={cat.id} value={cat.id.toString()}>
-                  {cat.name}
-                </MenuItem>
-              ))}
+              {categories?.map((cat) => ( <MenuItem key={cat.id} value={cat.id.toString()}>{cat.name}</MenuItem> ))}
             </Select>
+             {categoriesError && <FormHelperText error>Помилка завантаження категорій</FormHelperText>}
           </FormControl>
-          {/* Add Button */}
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={handleOpenAddModal}
+          {/* Add Category Button */}
+           <Button
+            variant="outlined"
+            startIcon={<CategoryIcon />}
+            onClick={handleOpenAddCategoryModal}
             sx={{ width: { xs: '100%', sm: 'auto'} }}
           >
+            Додати Категорію
+          </Button>
+          {/* Add Type Button */}
+          <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenAddTypeModal} sx={{ width: { xs: '100%', sm: 'auto'} }}>
             Додати Тип
           </Button>
         </Box>
@@ -275,74 +255,100 @@ export default function InventoryPage() {
 
       {/* --- Data Table --- */}
       {!isLoadingAssetTypes && !assetTypesError && assetTypes && (
-        <TableContainer component={Paper} elevation={3}>
-          <Table sx={{ minWidth: 750 }} aria-label="asset types table">
-            <TableHead sx={{ backgroundColor: 'action.hover' }}>
-              <TableRow>
-                <TableCell>Назва Типу Активу</TableCell>
-                <TableCell>Категорія</TableCell>
-                <TableCell align="right">На Складі</TableCell>
-                <TableCell align="right">Всього</TableCell>
-                <TableCell>Мін. Залишок</TableCell>
-                <TableCell>Статус Залишку</TableCell>
-                <TableCell>Примітки</TableCell>
-                <TableCell align="right">Дії</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {assetTypes.length === 0 ? (
-                 <TableRow><TableCell colSpan={8} align="center">Типів активів не знайдено (або не відповідають фільтру).</TableCell></TableRow>
-              ) : (
-                assetTypes.map((assetType) => (
-                  <TableRow key={assetType.id} hover>
-                    <TableCell component="th" scope="row" sx={{ fontWeight: 500 }}>
-                        {/* TODO: Make this a link to a page showing instances of this type */}
-                        {assetType.name}
-                    </TableCell>
-                    <TableCell>{assetType.categoryName ?? 'N/A'}</TableCell>
-                    <TableCell align="right">{assetType.onStockQuantity}</TableCell>
-                    <TableCell align="right">{assetType.totalQuantity}</TableCell>
-                    <TableCell>{assetType.minimum_stock_level ?? '-'}</TableCell>
-                    <TableCell>{getStockLevelChip(assetType)}</TableCell>
-                    <TableCell>
-                        <Tooltip title={assetType.notes || ''} placement="top-start">
-                            <Typography variant="body2" noWrap sx={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {assetType.notes || '-'}
-                            </Typography>
-                        </Tooltip>
-                    </TableCell>
-                    <TableCell align="right">
-                      <IconButton aria-label="actions" onClick={(event) => handleMenuClick(event, assetType)}>
-                        <MoreVertIcon />
-                      </IconButton>
-                    </TableCell>
+        <>
+            <TableContainer component={Paper} elevation={3}>
+              <Table sx={{ minWidth: 750 }} aria-label="asset types table">
+                <TableHead sx={{ backgroundColor: 'action.hover' }}>
+                  <TableRow>
+                    <TableCell>Назва Типу Активу</TableCell>
+                    <TableCell>Категорія</TableCell>
+                    <TableCell align="right">На Складі</TableCell>
+                    <TableCell align="right">Всього</TableCell>
+                    <TableCell>Мін. Залишок</TableCell>
+                    <TableCell>Статус Залишку</TableCell>
+                    <TableCell>Примітки</TableCell>
+                    <TableCell align="right">Дії</TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
+                </TableHead>
+                <TableBody>
+                  {assetTypes.length === 0 ? (
+                    <TableRow><TableCell colSpan={8} align="center">Типів активів не знайдено (або не відповідають фільтру).</TableCell></TableRow>
+                  ) : (
+                    assetTypes.map((assetType) => (
+                      <TableRow key={assetType.id} hover>
+                        <TableCell component="th" scope="row" sx={{ fontWeight: 500 }}>{assetType.name}</TableCell>
+                        <TableCell>{assetType.categoryName ?? 'N/A'}</TableCell>
+                        <TableCell align="right">{assetType.onStockQuantity}</TableCell>
+                        <TableCell align="right">{assetType.totalQuantity}</TableCell>
+                        <TableCell>{assetType.minimum_stock_level ?? '-'}</TableCell>
+                        <TableCell>{getStockLevelChip(assetType)}</TableCell>
+                        <TableCell>
+                            <Tooltip title={assetType.notes || ''} placement="top-start">
+                                <Typography variant="body2" noWrap sx={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {assetType.notes || '-'}
+                                </Typography>
+                            </Tooltip>
+                        </TableCell>
+                        <TableCell align="right">
+                          <IconButton aria-label="actions" onClick={(event) => handleMenuClick(event, assetType)}>
+                            <MoreVertIcon />
+                          </IconButton>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+
+            {/* --- Write-off Button --- */}
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2, mb: 1 }}>
+                <Button variant="outlined" color="secondary" component={NextLink} href="/inventory/write-off" >
+                    Списати Активи
+                </Button>
+            </Box>
+        </>
       )}
 
       {/* --- Action Menu --- */}
       <Menu anchorEl={anchorEl} open={menuOpen} onClose={handleMenuClose}>
-        {/* TODO: Add View Instances action */}
-        {/* <MenuItem onClick={handleViewInstances}><ListItemIcon><ListAltIcon fontSize="small" /></ListItemIcon><ListItemText>Екземпляри</ListItemText></MenuItem> */}
-        <MenuItem onClick={handleOpenEditModal}><ListItemIcon><EditIcon fontSize="small" /></ListItemIcon><ListItemText>Редагувати</ListItemText></MenuItem>
-        <MenuItem onClick={handleDelete} sx={{ color: 'error.main' }}><ListItemIcon><DeleteIcon fontSize="small" sx={{ color: 'error.main' }}/></ListItemIcon><ListItemText>Видалити</ListItemText></MenuItem>
+        <MenuItem onClick={handleOpenAddInstanceModal}><ListItemIcon><PlaylistAddIcon fontSize="small" /></ListItemIcon><ListItemText>Додати Партію/Екземпляр</ListItemText></MenuItem>
+        <MenuItem onClick={handleOpenEditTypeModal}><ListItemIcon><EditIcon fontSize="small" /></ListItemIcon><ListItemText>Редагувати Тип</ListItemText></MenuItem>
       </Menu>
 
-      {/* --- Modals (Placeholders) --- */}
-       {/* <AddAssetTypeModal open={addModalOpen} onClose={handleCloseAddModal} onSubmitSuccess={handleAddSuccess} categories={categories || []} /> */}
-       {/* {selectedAssetType && <EditAssetTypeModal open={editModalOpen} onClose={handleCloseEditModal} onSubmitSuccess={handleEditSuccess} assetType={selectedAssetType} categories={categories || []} />} */}
+      {/* --- Modals --- */}
+       <AddAssetTypeModal
+            open={addTypeModalOpen}
+            onClose={handleCloseAddTypeModal}
+            onSubmitSuccess={handleAddTypeSuccess}
+            categories={categories}
+            categoriesError={categoriesError}
+        />
+       <EditAssetTypeModal
+            open={editTypeModalOpen}
+            onClose={handleCloseEditTypeModal}
+            onSubmitSuccess={handleEditTypeSuccess}
+            assetType={assetTypeToEdit}
+            categories={categories}
+            categoriesError={categoriesError}
+        />
+        <AddAssetInstanceModal
+            open={addInstanceModalOpen}
+            onClose={handleCloseAddInstanceModal}
+            onSubmitSuccess={handleAddInstanceSuccess}
+            assetType={assetTypeForInstance}
+        />
+        {/* Render Add Category Modal */}
+        <AddCategoryModal
+            open={addCategoryModalOpen}
+            onClose={handleCloseAddCategoryModal}
+            onSubmitSuccess={handleAddCategorySuccess}
+         />
 
 
        {/* --- Snackbar --- */}
-       {snackbar && (
-           <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
-             <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>
-               {snackbar.message}
-             </Alert>
+       {snackbar && ( <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+             <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>{snackbar.message}</Alert>
            </Snackbar>
        )}
 

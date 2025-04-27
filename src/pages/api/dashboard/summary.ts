@@ -1,7 +1,19 @@
 // pages/api/dashboard/summary.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient, Prisma, AssetStatus } from '@prisma/client'; // Import AssetStatus if using Enum
+// Import necessary types from Prisma Client
+import {
+    PrismaClient,
+    Prisma,
+    AssetStatus,
+    AssetType,
+    AssetCategory,
+    AssetAssignmentHistory,
+    Employee,
+    AssetInstance // Import AssetInstance type
+} from '@prisma/client';
+import { Decimal } from '@prisma/client/runtime/library';
 
+// Use direct instantiation as before
 const prisma = new PrismaClient();
 
 // --- Type Definitions ---
@@ -10,17 +22,17 @@ type LowStockItem = {
   assetTypeName: string;
   categoryName: string;
   minimumStockLevel: number | null;
-  currentStock: number; // This will now be the SUM of quantities
+  currentStock: number;
 };
 
 type RecentActivity = {
-  type: 'assigned' | 'returned' | 'written_off';
+  activityType: 'assigned' | 'returned' | 'written_off';
   date: Date;
   employeeFullName: string | null;
   assetTypeName: string | null;
   inventoryNumber: string | null;
   assetInstanceId: number;
-  keySource: string; // Unique key for React list
+  keySource: string;
 };
 
 type ApiResponseData = {
@@ -33,24 +45,38 @@ type ApiErrorData = {
   details?: any;
 };
 
+// Define types for Prisma relations to help TypeScript
+type AssetTypeWithCategory = AssetType & {
+    category: { name: string } | null;
+};
+
+type HistoryWithRelations = AssetAssignmentHistory & {
+    employee: { full_name: string } | null;
+    assetInstance: {
+        id: number;
+        inventoryNumber: string;
+        assetType: { name: string } | null;
+    } | null; // assetInstance relation might be null if deleted concurrently
+};
+
+type WrittenOffInstanceWithRelations = AssetInstance & {
+    assetType: { name: string } | null;
+};
+
+
 // --- UPDATED Helper Function: Calculates SUM of quantity ---
 async function getCurrentStock(assetTypeId: number): Promise<number> {
   try {
-    // Use aggregate to SUM the quantity field
     const stockData = await prisma.assetInstance.aggregate({
-      _sum: {
-        quantity: true, // Calculate the sum of the 'quantity' field
-      },
+      _sum: { quantity: true },
       where: {
         assetTypeId: assetTypeId,
-        status: AssetStatus.on_stock, // Use Enum value 'on_stock'
+        status: AssetStatus.on_stock,
       },
     });
-    // Return the sum, or 0 if the sum is null (meaning no items on stock)
     return stockData._sum.quantity ?? 0;
   } catch (error) {
     console.error(`Error calculating stock sum for asset type ${assetTypeId}:`, error);
-    // Re-throw the error to be caught by the main handler
     throw new Error(`Failed to calculate stock sum for asset type ${assetTypeId}`);
   }
 }
@@ -60,6 +86,9 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ApiResponseData | ApiErrorData>
 ) {
+  // console.log("--- DASHBOARD SUMMARY API START ---");
+  // console.log("DATABASE_URL at handler start:", process.env.DATABASE_URL);
+
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET']);
     return res.status(405).json({ message: `Method ${req.method} Not Allowed` });
@@ -73,7 +102,7 @@ export default async function handler(
 
   try {
     // --- 1. Fetch Low Stock Items ---
-    const assetTypes = await prisma.assetType.findMany({
+    const assetTypes: AssetTypeWithCategory[] = await prisma.assetType.findMany({
       where: {
         minimum_stock_level: { gt: 0 },
       },
@@ -82,54 +111,52 @@ export default async function handler(
       },
     });
 
-    // Use Promise.all to fetch stock counts concurrently
-    const lowStockItemsPromises = assetTypes.map(async (type) => {
-      try {
-          // Call the UPDATED getCurrentStock function
-          const currentStock = await getCurrentStock(type.id);
-          if (type.minimum_stock_level !== null && currentStock < type.minimum_stock_level) {
-              return {
-                  assetTypeId: type.id,
-                  assetTypeName: type.name,
-                  categoryName: type.category?.name ?? 'N/A',
-                  minimumStockLevel: type.minimum_stock_level,
-                  currentStock: currentStock, // This is now the SUM
-              };
-          }
-          return null;
-      } catch (error) {
-           console.error(`Skipping low stock check for type ${type.id} due to error:`, error);
-           return null; // Skip this type if stock calculation failed
-      }
+    const lowStockItemsPromises = assetTypes.map(async (type: AssetTypeWithCategory) => { // Add type annotation
+        const currentStock = await getCurrentStock(type.id);
+        if (type.minimum_stock_level !== null && currentStock < type.minimum_stock_level) {
+            return {
+                assetTypeId: type.id,
+                assetTypeName: type.name,
+                categoryName: type.category?.name ?? 'N/A',
+                minimumStockLevel: type.minimum_stock_level,
+                currentStock: currentStock,
+            };
+        }
+        return null;
     });
 
-    const lowStockItems = (await Promise.all(lowStockItemsPromises)).filter(item => item !== null) as LowStockItem[];
+    // Specify type for PromiseSettledResult if needed, though inference might work
+    const stockResults = await Promise.allSettled(lowStockItemsPromises);
+    const lowStockItems: LowStockItem[] = [];
+    // Add explicit types for result and index
+    stockResults.forEach((result: PromiseSettledResult<LowStockItem | null>, index: number) => {
+        if (result.status === 'fulfilled' && result.value !== null) {
+            lowStockItems.push(result.value);
+        } else if (result.status === 'rejected') {
+            console.error(`Skipping low stock check for type ${assetTypes[index]?.id}:`, result.reason);
+        }
+    });
 
 
     // --- 2. Fetch Recent Activities ---
     let combinedActivities: RecentActivity[] = [];
 
     // Fetch recent assignments/returns from history
-    const recentHistory = await prisma.assetAssignmentHistory.findMany({
-      // Fetch a bit more initially as returns create separate entries conceptually
-      take: limitNum * 2, // Adjust multiplier as needed
-      orderBy: [ { assignment_date: 'desc' } ], // Order by assignment first
+    const recentHistory: HistoryWithRelations[] = await prisma.assetAssignmentHistory.findMany({
+      take: limitNum * 2,
+      orderBy: [ { assignment_date: 'desc' } ],
       include: {
         employee: { select: { full_name: true } },
         assetInstance: {
-          select: {
-            id: true, inventoryNumber: true,
-            assetType: { select: { name: true } },
-          },
+          select: { id: true, inventoryNumber: true, assetType: { select: { name: true } }, },
         },
       },
     });
 
-    // Process history into activities
-    recentHistory.forEach(hist => {
-        // Add assignment activity
+    // Process history into activities - Add type annotation for hist
+    recentHistory.forEach((hist: HistoryWithRelations) => {
         combinedActivities.push({
-            type: 'assigned',
+            activityType: 'assigned',
             date: hist.assignment_date,
             employeeFullName: hist.employee?.full_name ?? null,
             assetTypeName: hist.assetInstance?.assetType?.name ?? null,
@@ -137,10 +164,9 @@ export default async function handler(
             assetInstanceId: hist.asset_instance_id,
             keySource: `assign-${hist.id}`
         });
-        // Add return activity if applicable
         if (hist.return_date) {
             combinedActivities.push({
-                type: 'returned',
+                activityType: 'returned',
                 date: hist.return_date,
                 employeeFullName: hist.employee?.full_name ?? null,
                 assetTypeName: hist.assetInstance?.assetType?.name ?? null,
@@ -152,20 +178,18 @@ export default async function handler(
     });
 
      // Fetch recent written-off instances
-     const recentWrittenOff = await prisma.assetInstance.findMany({
-        where: { status: AssetStatus.written_off }, // Use Enum
+     const recentWrittenOff: WrittenOffInstanceWithRelations[] = await prisma.assetInstance.findMany({
+        where: { status: AssetStatus.written_off },
         take: limitNum,
         orderBy: { updated_at: 'desc' },
-        include: {
-            assetType: { select: { name: true } },
-        },
+        include: { assetType: { select: { name: true } }, },
      });
 
-     // Process written-off into activities
-     recentWrittenOff.forEach(inst => {
+     // Process written-off into activities - Add type annotation for inst
+     recentWrittenOff.forEach((inst: WrittenOffInstanceWithRelations) => {
          if (inst.updated_at) {
              combinedActivities.push({
-                type: 'written_off',
+                activityType: 'written_off',
                 date: inst.updated_at,
                 employeeFullName: null,
                 assetTypeName: inst.assetType?.name ?? null,
@@ -183,24 +207,19 @@ export default async function handler(
 
 
     // --- 3. Send Response ---
-    if (!res) {
-        console.error("Response object became undefined before sending summary response!");
-        throw new Error("Response object is unavailable");
-    }
-    res.status(200).json({
-      lowStockItems,
-      recentActivities: sortedActivities,
-    });
+    if (!res) { throw new Error("Response object is unavailable"); }
+    res.status(200).json({ lowStockItems, recentActivities: sortedActivities });
 
   } catch (error) {
     console.error('Failed to fetch dashboard summary:', error);
     const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
-    if (res) {
+    if (res && !res.headersSent) {
         res.status(500).json({ message: errorMessage, details: error instanceof Error ? error.stack : error });
     } else {
-        console.error("Response object became undefined before sending summary error response!");
+        console.error("Response unavailable or headers sent in main error handler.");
     }
   } finally {
-    await prisma.$disconnect().catch(e => console.error("Failed to disconnect Prisma Client:", e));
+    // Add explicit type for error in catch block
+    await prisma.$disconnect().catch((e: unknown) => console.error("Failed to disconnect Prisma Client:", e));
   }
 }
