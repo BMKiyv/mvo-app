@@ -11,7 +11,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// --- Новий Enum для ролі в комісії ---
+// Enum для ролі в комісії зі списання
 enum CommissionRole {
   none    // Не є членом комісії
   member  // Член комісії
@@ -22,20 +22,22 @@ model Employee {
   id             Int      @id @default(autoincrement())
   full_name      String
   position       String?
-  contact_info   String?
+  contact_info   String?  // Можливо, додати @unique, якщо email має бути унікальним?
   is_active      Boolean  @default(true)
-  is_responsible Boolean  @default(false)
+  is_responsible Boolean  @default(false) // Матеріально-відповідальна особа
+
+  // --- Нові поля для ролей ---
+  is_head_of_enterprise Boolean @default(false) // Голова підприємства (для підпису актів)
+  is_chief_accountant   Boolean @default(false) // Головний бухгалтер (для підпису актів)
+  commission_role       CommissionRole @default(none) // Роль в комісії зі списання
+
   created_at     DateTime @default(now())
   updated_at     DateTime? @updatedAt
-
-  // --- Нове поле для ролі в комісії ---
-  commission_role CommissionRole @default(none)
 
   // Relations
   assetInstances AssetInstance[]          @relation("CurrentHolder")
   assignments    AssetAssignmentHistory[]
-  // Relation to WriteOffLog (optional, if you want to link who performed the write-off)
-  // writeOffsDone WriteOffLog[] @relation("PerformedBy")
+  // writeOffsDone WriteOffLog[] @relation("PerformedBy") // Якщо потрібно зв'язати списання з виконавцем
 }
 
 model AssetCategory {
@@ -51,7 +53,7 @@ model AssetCategory {
 model AssetType {
   id                  Int       @id @default(autoincrement())
   name                String
-  minimum_stock_level Int       // Minimum total quantity for this type
+  minimum_stock_level Int       // Мінімальна *загальна* кількість цього типу
   notes               String?
   created_at          DateTime  @default(now())
   updated_at          DateTime? @updatedAt
@@ -60,19 +62,18 @@ model AssetType {
   // Relations
   category            AssetCategory   @relation(fields: [categoryId], references: [id])
   assetInstances      AssetInstance[]
-  // Relation to WriteOffLog
-  writeOffLogs        WriteOffLog[]
+  writeOffLogs        WriteOffLog[]   // Зв'язок з логом списання
 }
 
-// --- Оновлений Enum для статусів активів ---
+// Оновлений Enum для статусів активів
 enum AssetStatus {
   on_stock    // На складі
   issued      // Видано активному співробітнику
-  written_off // Списано (не використовується активно, але запис існує)
+  written_off // Списано (архів)
   in_repair   // В ремонті
   lost        // Втрачено
   reserved    // Зарезервовано
-  damaged     // Пошкоджено (потребує рішення: ремонт/списання)
+  damaged     // Пошкоджено
   unreturned  // Не повернуто звільненим співробітником
 }
 
@@ -81,9 +82,9 @@ model AssetInstance {
   inventoryNumber     String    // Не унікальний
   unit_cost           Decimal   @db.Decimal(10, 2)
   purchase_date       DateTime
-  status              AssetStatus @default(on_stock) // Використовуємо оновлений Enum
+  status              AssetStatus @default(on_stock)
   notes               String?
-  quantity            Int       @default(1)
+  quantity            Int       @default(1) // Кількість одиниць у цьому записі
   created_at          DateTime  @default(now())
   updated_at          DateTime? @updatedAt
 
@@ -98,36 +99,31 @@ model AssetInstance {
 
 model AssetAssignmentHistory {
   id                  Int       @id @default(autoincrement())
-  asset_instance_id   Int
+  asset_instance_id   Int       // Посилання на конкретний AssetInstance (зазвичай з quantity=1)
   employee_id         Int
   assignment_date     DateTime  @default(now())
   return_date         DateTime?
-  // Optional: Status at return (e.g., 'returned_ok', 'returned_damaged') could be added
-  // return_status String?
+  // return_status String? // Можна додати статус повернення
 
   // Relations
   assetInstance       AssetInstance @relation(fields: [asset_instance_id], references: [id])
   employee            Employee      @relation(fields: [employee_id], references: [id])
 }
 
-// --- Нова модель для логування списань ---
+// Нова модель для логування списань
 model WriteOffLog {
   id            Int       @id @default(autoincrement())
   assetTypeId   Int       // Який тип активу списано
   quantity      Int       // Скільки одиниць списано
   writeOffDate  DateTime  @default(now()) // Дата списання
   reason        String?   // Причина списання (опціонально)
-  // Optional: Link to the employee who performed/authorized the write-off
-  // performedById Int?
+  // performedById Int?   // Опціонально: ID співробітника, що виконав/затвердив
   // performedBy   Employee? @relation("PerformedBy", fields: [performedById], references: [id])
-  // Optional: Link to a specific AssetInstance if applicable (e.g., unique item write-off)
-  // assetInstanceId Int?
-  // assetInstance   AssetInstance? @relation(fields: [assetInstanceId], references: [id])
 
   // Relation to AssetType
   assetType     AssetType @relation(fields: [assetTypeId], references: [id])
 
-  @@index([assetTypeId]) // Індекс для швидкого пошуку списань за типом
-  @@index([writeOffDate]) // Індекс за датою
+  @@index([assetTypeId])
+  @@index([writeOffDate])
 }
 

@@ -18,22 +18,29 @@ import DialogTitle from '@mui/material/DialogTitle';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import Alert from '@mui/material/Alert';
-import FormControl from '@mui/material/FormControl'; // <--- Додано
-import InputLabel from '@mui/material/InputLabel'; // <--- Додано
-import Select from '@mui/material/Select';       // <--- Додано
-import MenuItem from '@mui/material/MenuItem';     // <--- Додано
-import FormHelperText from '@mui/material/FormHelperText'; // <--- Додано
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import Select from '@mui/material/Select';
+import MenuItem from '@mui/material/MenuItem';
+import FormHelperText from '@mui/material/FormHelperText';
+import FormGroup from '@mui/material/FormGroup';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import Checkbox from '@mui/material/Checkbox';
+import Divider from '@mui/material/Divider';
+import Typography from '@mui/material/Typography'; // <--- ДОДАНО ІМПОРТ TYPOGRAPHY
 
-// --- Тип даних для форми додавання (з commission_role) ---
+// --- Тип даних для форми додавання (з усіма ролями) ---
 type EmployeeAddFormShape = {
   full_name: string;
   position: string | null;
   contact_info: string | null;
-  commission_role: CommissionRole; // Додано поле, тип - Enum
+  commission_role: CommissionRole;
+  is_head_of_enterprise: boolean;
+  is_chief_accountant: boolean;
+  // is_responsible: boolean;
 };
 
-// --- Тип даних, що повертає API після успішного створення ---
-// Оновлюємо для включення commission_role
+// --- Тип даних, що повертає API ---
 type EmployeeApiResponse = {
     id: number;
     full_name: string;
@@ -41,7 +48,9 @@ type EmployeeApiResponse = {
     contact_info: string | null;
     is_active: boolean;
     is_responsible: boolean;
-    commission_role: CommissionRole; // Додано поле
+    commission_role: CommissionRole;
+    is_head_of_enterprise: boolean;
+    is_chief_accountant: boolean;
 }
 
 // --- Тип пропсів компонента ---
@@ -51,7 +60,7 @@ interface AddEmployeeModalProps {
   onSubmitSuccess: (newEmployee: EmployeeApiResponse) => void;
 }
 
-// --- Опції для вибору ролі ---
+// --- Опції для вибору ролі в комісії ---
 const commissionRoleOptions: { value: CommissionRole; label: string }[] = [
     { value: CommissionRole.none, label: 'Не в комісії' },
     { value: CommissionRole.member, label: 'Член комісії' },
@@ -59,27 +68,15 @@ const commissionRoleOptions: { value: CommissionRole; label: string }[] = [
 ];
 
 
-// --- Схема валідації Yup (з commission_role) ---
+// --- Схема валідації Yup (з усіма ролями) ---
 const validationSchema = yup.object({
-  full_name: yup
-    .string()
-    .trim()
-    .required("ПІБ є обов'язковим")
-    .min(3, 'ПІБ має містити принаймні 3 символи'),
-  position: yup
-    .string()
-    .nullable()
-    .default(null),
-  contact_info: yup
-    .string()
-    .nullable()
-    .email('Невірний формат email')
-    .test('is-valid-email-or-empty', 'Невірний формат email', (value) => !value || yup.string().email().isValidSync(value))
-    .default(null),
-  commission_role: yup // Додано валідацію для ролі
-    .mixed<CommissionRole>() // Вказуємо тип Enum
-    .oneOf(Object.values(CommissionRole), 'Некоректна роль в комісії') // Перевіряємо, чи значення є в Enum
-    .required("Роль в комісії є обов'язковою"), // Робимо поле обов'язковим
+  full_name: yup.string().trim().required("ПІБ є обов'язковим").min(3, 'ПІБ має містити принаймні 3 символи'),
+  position: yup.string().nullable().default(null),
+  contact_info: yup.string().nullable().email('Невірний формат email').test('is-valid-email-or-empty', 'Невірний формат email', (value) => !value || yup.string().email().isValidSync(value)).default(null),
+  commission_role: yup.mixed<CommissionRole>().oneOf(Object.values(CommissionRole), 'Некоректна роль в комісії').required("Роль в комісії є обов'язковою"),
+  is_head_of_enterprise: yup.boolean().required(),
+  is_chief_accountant: yup.boolean().required(),
+  // is_responsible: yup.boolean().required(),
 });
 
 // --- Компонент Модального Вікна Додавання ---
@@ -91,7 +88,7 @@ export default function AddEmployeeModal({
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
 
-  // --- React Hook Form (з commission_role) ---
+  // --- React Hook Form (з усіма ролями) ---
   const {
     control,
     handleSubmit,
@@ -99,36 +96,44 @@ export default function AddEmployeeModal({
     formState: { errors },
   } = useForm<EmployeeAddFormShape>({
     resolver: yupResolver(validationSchema),
-    defaultValues: { // Додаємо значення за замовчуванням
+    defaultValues: {
       full_name: '',
       position: null,
       contact_info: null,
-      commission_role: CommissionRole.none, // За замовчуванням - не в комісії
+      commission_role: CommissionRole.none,
+      is_head_of_enterprise: false,
+      is_chief_accountant: false,
+      // is_responsible: false,
     },
   });
 
   // --- Ефект для скидання форми ---
   React.useEffect(() => {
     if (!open) {
-      // Скидаємо всі поля
-      reset({ full_name: '', position: null, contact_info: null, commission_role: CommissionRole.none });
+      reset({
+          full_name: '', position: null, contact_info: null,
+          commission_role: CommissionRole.none,
+          is_head_of_enterprise: false, is_chief_accountant: false
+      });
       setSubmitError(null);
     } else {
         setSubmitError(null);
     }
   }, [open, reset]);
 
-  // --- Form Submission Handler (з commission_role) ---
+  // --- Form Submission Handler (з усіма ролями) ---
   const onSubmit: SubmitHandler<EmployeeAddFormShape> = async (data) => {
     setIsSubmitting(true);
     setSubmitError(null);
 
-    // Формуємо payload з усіма полями
     const payload = {
         full_name: data.full_name,
         position: data.position || null,
         contact_info: data.contact_info || null,
-        commission_role: data.commission_role, // Додаємо роль
+        commission_role: data.commission_role,
+        is_head_of_enterprise: data.is_head_of_enterprise,
+        is_chief_accountant: data.is_chief_accountant,
+        // is_responsible: data.is_responsible,
     };
     console.log("Submitting Employee Data:", payload);
 
@@ -165,10 +170,7 @@ export default function AddEmployeeModal({
   };
 
   // --- Close Handler ---
-  const handleClose = () => {
-    if (isSubmitting) return;
-    onClose();
-  };
+  const handleClose = () => { if (isSubmitting) return; onClose(); };
 
 
   return (
@@ -176,44 +178,72 @@ export default function AddEmployeeModal({
       <DialogTitle>Додати Нового Співробітника</DialogTitle>
       <Box component="form" onSubmit={handleSubmit(onSubmit)} noValidate>
         <DialogContent>
-          {submitError && (
-            <Alert severity="error" sx={{ mb: 2 }}>{submitError}</Alert>
-          )}
+          {submitError && ( <Alert severity="error" sx={{ mb: 2 }}>{submitError}</Alert> )}
 
-          {/* Поле ПІБ */}
+          {/* Основні дані */}
           <Controller name="full_name" control={control} render={({ field }) => ( <TextField {...field} margin="dense" label="ПІБ" type="text" fullWidth variant="outlined" required error={!!errors.full_name} helperText={errors.full_name?.message} disabled={isSubmitting} autoFocus /> )} />
-
-          {/* Поле Посада */}
           <Controller name="position" control={control} render={({ field }) => ( <TextField {...field} value={field.value ?? ''} margin="dense" label="Посада" type="text" fullWidth variant="outlined" error={!!errors.position} helperText={errors.position?.message} disabled={isSubmitting} /> )} />
-
-          {/* Поле Контактна інформація */}
           <Controller name="contact_info" control={control} render={({ field }) => ( <TextField {...field} value={field.value ?? ''} margin="dense" label="Контактна інформація (Email)" type="email" fullWidth variant="outlined" error={!!errors.contact_info} helperText={errors.contact_info?.message} disabled={isSubmitting} /> )} />
 
-          {/* --- Поле Роль в Комісії (НОВЕ) --- */}
-           <Controller
-                name="commission_role"
-                control={control}
-                render={({ field }) => (
-                    <FormControl fullWidth margin="dense" required error={!!errors.commission_role} disabled={isSubmitting}>
-                        <InputLabel id="commission-role-select-label">Роль в Комісії Списання</InputLabel>
-                        <Select
-                            {...field}
-                            labelId="commission-role-select-label"
-                            label="Роль в Комісії Списання"
-                            // value вже має тип CommissionRole
-                        >
-                            {/* Немає опції "не вибрано", бо поле обов'язкове */}
-                            {commissionRoleOptions.map((option) => (
-                                <MenuItem key={option.value} value={option.value}>
-                                    {option.label}
-                                </MenuItem>
-                            ))}
-                        </Select>
-                        {errors.commission_role && <FormHelperText>{errors.commission_role.message}</FormHelperText>}
-                    </FormControl>
-                )}
-            />
+          <Divider sx={{ my: 2 }} />
 
+          {/* Ролі */}
+          <Typography variant="subtitle1" gutterBottom>Ролі Співробітника</Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {/* Роль в Комісії */}
+                <Controller
+                    name="commission_role"
+                    control={control}
+                    render={({ field }) => (
+                        <FormControl fullWidth margin="dense" required error={!!errors.commission_role} disabled={isSubmitting}>
+                            <InputLabel id="commission-role-select-label">Роль в Комісії Списання</InputLabel>
+                            <Select {...field} labelId="commission-role-select-label" label="Роль в Комісії Списання">
+                                {commissionRoleOptions.map((option) => ( <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem> ))}
+                            </Select>
+                            {errors.commission_role && <FormHelperText>{errors.commission_role.message}</FormHelperText>}
+                        </FormControl>
+                    )}
+                />
+
+                {/* Прапорці для інших ролей */}
+                <FormGroup>
+                    {/* Голова підприємства */}
+                    <Controller
+                        name="is_head_of_enterprise"
+                        control={control}
+                        render={({ field }) => (
+                            <FormControlLabel
+                                control={<Checkbox {...field} checked={field.value} disabled={isSubmitting} />}
+                                label="Голова Підприємства (для підпису актів)"
+                            />
+                        )}
+                    />
+                    {/* Головний бухгалтер */}
+                     <Controller
+                        name="is_chief_accountant"
+                        control={control}
+                        render={({ field }) => (
+                            <FormControlLabel
+                                control={<Checkbox {...field} checked={field.value} disabled={isSubmitting} />}
+                                label="Головний Бухгалтер (для підпису актів)"
+                            />
+                        )}
+                    />
+                     {/* Відповідальна особа (якщо потрібно) */}
+                     {/*
+                     <Controller
+                        name="is_responsible"
+                        control={control}
+                        render={({ field }) => (
+                            <FormControlLabel
+                                control={<Checkbox {...field} checked={field.value} disabled={isSubmitting} />}
+                                label="Матеріально-відповідальна особа"
+                            />
+                        )}
+                    />
+                    */}
+                </FormGroup>
+          </Box>
 
         </DialogContent>
         <DialogActions sx={{ padding: '16px 24px' }}>

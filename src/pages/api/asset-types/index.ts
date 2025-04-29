@@ -1,23 +1,24 @@
 // pages/api/asset-types/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient, Prisma, AssetStatus } from '@prisma/client';
+import { PrismaClient, Prisma, AssetStatus, AssetType, AssetCategory } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
 // --- Типи Даних ---
-// Тип для GET відповіді
 type AssetTypeWithCounts = {
-    id: number; name: string; minimum_stock_level: number | null; // Залишаємо null тут, бо читаємо з БД
+    id: number; name: string; minimum_stock_level: number | null;
     notes: string | null; categoryId: number; categoryName: string | null;
-    totalQuantity: number; onStockQuantity: number; createdAt: Date;
+    totalQuantity: number;
+    onStockQuantity: number;
+    createdAt: Date;
 };
 type ApiResponseDataGET = AssetTypeWithCounts[];
 
-// Тип для тіла POST запиту
+// *** ВИПРАВЛЕНО/ДОДАНО: Повне визначення типу для тіла POST запиту ***
 type CreateAssetTypeDto = {
   name: string;
   categoryId: number;
-  minimum_stock_level: number | null; // Може прийти null з фронту
+  minimum_stock_level: number | null;
   notes: string | null;
 };
 
@@ -32,22 +33,28 @@ type CreateAssetTypeResponse = {
 type ApiResponseData = ApiResponseDataGET | CreateAssetTypeResponse;
 type ApiErrorData = { message: string; details?: any };
 
-// --- Допоміжна функція для підрахунку кількості (з GET) ---
+// --- Допоміжна функція для підрахунку кількості ---
 async function calculateQuantities(assetTypeId: number): Promise<{ totalQuantity: number; onStockQuantity: number }> {
     try {
-        const [totalData, onStockData] = await Promise.all([
+        const [totalInstanceData, onStockInstanceData, writeOffData] = await Promise.all([
             prisma.assetInstance.aggregate({ _sum: { quantity: true }, where: { assetTypeId: assetTypeId } }),
-            prisma.assetInstance.aggregate({ _sum: { quantity: true }, where: { assetTypeId: assetTypeId, status: AssetStatus.on_stock } })
+            prisma.assetInstance.aggregate({ _sum: { quantity: true }, where: { assetTypeId: assetTypeId, status: AssetStatus.on_stock } }),
+            prisma.writeOffLog.aggregate({ _sum: { quantity: true }, where: { assetTypeId: assetTypeId, } })
         ]);
+        const totalReceivedSum = totalInstanceData._sum.quantity ?? 0;
+        const onStockInstanceSum = onStockInstanceData._sum.quantity ?? 0;
+        const writtenOffSum = writeOffData._sum.quantity ?? 0;
+        const currentStock = onStockInstanceSum - writtenOffSum;
         return {
-            totalQuantity: totalData._sum.quantity ?? 0,
-            onStockQuantity: onStockData._sum.quantity ?? 0,
+            totalQuantity: totalReceivedSum,
+            onStockQuantity: Math.max(0, currentStock),
         };
     } catch (error) {
         console.error(`Error calculating quantities for asset type ${assetTypeId}:`, error);
         return { totalQuantity: 0, onStockQuantity: 0 };
     }
 }
+
 
 // --- Основний обробник ---
 export default async function handler(
@@ -62,19 +69,16 @@ export default async function handler(
       if (categoryId && typeof categoryId === 'string' && !isNaN(parseInt(categoryId))) {
         whereCondition.categoryId = parseInt(categoryId, 10);
       }
-
-      const assetTypes = await prisma.assetType.findMany({
+      const assetTypes: (AssetType & { category: { name: string } | null })[] = await prisma.assetType.findMany({
         where: whereCondition,
         include: { category: { select: { name: true } } },
         orderBy: { name: 'asc' },
       });
-
       const assetTypesWithCountsPromises = assetTypes.map(async (type) => {
         const quantities = await calculateQuantities(type.id);
         return {
           id: type.id,
           name: type.name,
-          // Читаємо minimum_stock_level як є з БД (може бути null, якщо схема дозволяє)
           minimum_stock_level: type.minimum_stock_level,
           notes: type.notes,
           categoryId: type.categoryId,
@@ -84,11 +88,17 @@ export default async function handler(
           createdAt: type.created_at
         };
       });
-      const resultData = await Promise.all(assetTypesWithCountsPromises);
-
+      const results = await Promise.allSettled(assetTypesWithCountsPromises);
+      const resultData: AssetTypeWithCounts[] = [];
+       results.forEach((result, index) => {
+           if (result.status === 'fulfilled') {
+               resultData.push(result.value);
+           } else {
+               console.error(`Failed to process quantities for asset type ${assetTypes[index]?.id}:`, result.reason);
+           }
+       });
       if (!res) { console.error("GET AssetTypes: Response object undefined!"); return; }
       res.status(200).json(resultData);
-
     } catch (error) {
       console.error('Failed to fetch asset types:', error);
       if (!res) { console.error("GET AssetTypes Error: Response object undefined!"); return; }
@@ -100,35 +110,17 @@ export default async function handler(
   // --- Обробка POST-запиту ---
   else if (req.method === 'POST') {
       try {
+          // *** ВИПРАВЛЕНО: Використовуємо повний тип CreateAssetTypeDto ***
           const { name, categoryId, minimum_stock_level, notes } = req.body as CreateAssetTypeDto;
 
           // --- Валідація вхідних даних ---
-          if (!name || typeof name !== 'string' || !name.trim()) {
-              return res.status(400).json({ message: 'Назва типу активу є обов\'язковою.' });
-          }
-          if (typeof categoryId !== 'number' || !Number.isInteger(categoryId) || categoryId <= 0) {
-              return res.status(400).json({ message: 'Некоректний ID категорії.' });
-          }
-           // Перевірка minimum_stock_level: має бути null або невід'ємне ціле число
-          if (minimum_stock_level !== null && (typeof minimum_stock_level !== 'number' || !Number.isInteger(minimum_stock_level) || minimum_stock_level < 0)) {
-               return res.status(400).json({ message: 'Некоректне значення мінімального залишку (має бути ціле невід\'ємне число або не вказано).' });
-          }
-
-          // Перевірка існування категорії
+          if (!name || typeof name !== 'string' || !name.trim()) { return res.status(400).json({ message: 'Назва типу активу є обов\'язковою.' }); }
+          if (typeof categoryId !== 'number' || !Number.isInteger(categoryId) || categoryId <= 0) { return res.status(400).json({ message: 'Некоректний ID категорії.' }); }
+          if (minimum_stock_level !== null && (typeof minimum_stock_level !== 'number' || !Number.isInteger(minimum_stock_level) || minimum_stock_level < 0)) { return res.status(400).json({ message: 'Некоректне значення мінімального залишку (має бути ціле невід\'ємне число або не вказано).' }); }
           const categoryExists = await prisma.assetCategory.findUnique({ where: { id: categoryId } });
-          if (!categoryExists) {
-              return res.status(400).json({ message: `Категорія з ID ${categoryId} не знайдена.` });
-          }
-
-          // Перевірка на унікальність назви типу В МЕЖАХ КАТЕГОРІЇ
-          const existingType = await prisma.assetType.findFirst({
-              where: { name: name.trim(), categoryId: categoryId }
-          });
-          if (existingType) {
-              return res.status(409).json({ message: `Тип активу з назвою "${name.trim()}" вже існує в цій категорії.` });
-          }
-
-          // *** ВИПРАВЛЕННЯ: Встановлюємо 0, якщо minimum_stock_level === null ***
+          if (!categoryExists) { return res.status(400).json({ message: `Категорія з ID ${categoryId} не знайдена.` }); }
+          const existingType = await prisma.assetType.findFirst({ where: { name: name.trim(), categoryId: categoryId } });
+          if (existingType) { return res.status(409).json({ message: `Тип активу з назвою "${name.trim()}" вже існує в цій категорії.` }); }
           const stockLevelToSave = minimum_stock_level === null ? 0 : minimum_stock_level;
 
           // Створення нового типу активу
@@ -136,23 +128,19 @@ export default async function handler(
               data: {
                   name: name.trim(),
                   categoryId: categoryId,
-                  minimum_stock_level: stockLevelToSave, // Зберігаємо 0 або надане число
+                  minimum_stock_level: stockLevelToSave,
                   notes: notes || null,
               },
-              select: {
-                  id: true, name: true, categoryId: true,
-                  minimum_stock_level: true, // Повертаємо збережене значення (0 або число)
-                  notes: true, created_at: true, updated_at: true
-              }
+              select: { id: true, name: true, categoryId: true, minimum_stock_level: true, notes: true, created_at: true, updated_at: true }
           });
-
            if (!res) { console.error("POST AssetType: Response object undefined!"); return; }
-          res.status(201).json(newAssetType);
+          res.status(201).json(newAssetType); // Відповідь для POST - один об'єкт
 
       } catch (error) {
           console.error('Failed to create asset type:', error);
            if (!res) { console.error("POST AssetType Error: Response object undefined!"); return; }
            if (error instanceof Prisma.PrismaClientKnownRequestError) {
+                if (error.code === 'P2002') { return res.status(409).json({ message: `Категорія з назвою "${req.body.name?.trim()}" вже існує.` }); }
                 return res.status(400).json({ message: `Помилка бази даних: ${error.code}`, details: error.message });
            }
           res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) });
@@ -169,6 +157,6 @@ export default async function handler(
 
    // Disconnect Prisma Client finally after handling request
    if (prisma) {
-       await prisma.$disconnect().catch(e => console.error("Failed to disconnect Prisma Client:", e));
+       await prisma.$disconnect().catch((e: unknown) => console.error("Failed to disconnect Prisma Client:", e));
    }
 }

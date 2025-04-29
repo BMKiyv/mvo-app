@@ -1,12 +1,13 @@
 // pages/api/employees/[id].ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient, Prisma } from '@prisma/client';
+// Додаємо CommissionRole до імпорту
+import { PrismaClient, Prisma, CommissionRole } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
 // --- Типи Даних ---
 
-// Тип для відповіді GET (деталі співробітника)
+// Тип для відповіді GET (деталі співробітника - додаємо ролі)
 type EmployeeDetailsData = {
   id: number;
   full_name: string;
@@ -14,10 +15,13 @@ type EmployeeDetailsData = {
   contact_info: string | null;
   is_active: boolean;
   is_responsible: boolean;
+  commission_role: CommissionRole; // <--- Додано
+  is_head_of_enterprise: boolean; // <--- Додано
+  is_chief_accountant: boolean;   // <--- Додано
   created_at: Date;
 };
 
-// Тип для відповіді PUT (оновлені дані, без created_at)
+// Тип для відповіді PUT (оновлені дані - додаємо ролі)
 type EmployeeUpdateResponseData = {
     id: number;
     full_name: string;
@@ -25,6 +29,9 @@ type EmployeeUpdateResponseData = {
     contact_info: string | null;
     is_active: boolean;
     is_responsible: boolean;
+    commission_role: CommissionRole; // <--- Додано
+    is_head_of_enterprise: boolean; // <--- Додано
+    is_chief_accountant: boolean;   // <--- Додано
 };
 
 // Тип для відповіді DELETE (підтвердження деактивації)
@@ -34,7 +41,7 @@ type EmployeeDeactivateResponseData = {
 };
 
 // Тип для помилки
-type ApiErrorData = { message: string; details?: any }; // Додано details
+type ApiErrorData = { message: string; details?: any };
 
 // --- Оновлений тип для NextApiResponse ---
 type ApiResponse =
@@ -42,6 +49,17 @@ type ApiResponse =
     | EmployeeUpdateResponseData
     | EmployeeDeactivateResponseData
     | ApiErrorData;
+
+// --- Тип для тіла PUT запиту (додаємо необов'язкові ролі) ---
+type UpdateEmployeeDto = {
+    full_name?: string;
+    position?: string | null;
+    contact_info?: string | null;
+    commission_role?: CommissionRole;
+    is_head_of_enterprise?: boolean;
+    is_chief_accountant?: boolean;
+    // is_responsible?: boolean; // Можливо, теж треба редагувати?
+};
 
 
 export default async function handler(
@@ -62,9 +80,10 @@ export default async function handler(
     try {
       const employee = await prisma.employee.findUnique({
         where: { id: employeeId },
-        select: {
+        select: { // Додаємо нові поля до select
           id: true, full_name: true, position: true, contact_info: true,
           is_active: true, is_responsible: true, created_at: true,
+          commission_role: true, is_head_of_enterprise: true, is_chief_accountant: true,
         },
       });
 
@@ -74,44 +93,100 @@ export default async function handler(
       }
 
       if (!res) return console.error("Response object undefined before sending GET success response!");
+      // Тип відповіді тепер EmployeeDetailsData
       res.status(200).json(employee);
 
     } catch (error) {
       console.error(`Failed to fetch employee ${employeeId}:`, error);
       if (!res) return console.error("Response object undefined before sending GET error response!");
-      res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) }); // Додано details
+      res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) });
     } finally {
-      // Disconnect moved to the end
+      // Disconnect moved
     }
   }
   // --- Handle PUT request (from EditEmployeeModal) ---
   else if (req.method === 'PUT') {
-      type UpdateEmployeeDto = { full_name?: string; position?: string | null; contact_info?: string | null; };
       try {
-        const { full_name, position, contact_info } = req.body as UpdateEmployeeDto;
+        // Отримуємо всі можливі поля з тіла запиту
+        const {
+            full_name,
+            position,
+            contact_info,
+            commission_role,
+            is_head_of_enterprise,
+            is_chief_accountant
+            // is_responsible // Якщо потрібно редагувати
+        } = req.body as UpdateEmployeeDto;
+
+        // Використовуємо Prisma.EmployeeUpdateInput для коректної типізації
         const updateData: Prisma.EmployeeUpdateInput = {};
+
+        // Валідація та додавання полів до updateData
         if (full_name !== undefined) {
             if (!full_name.trim()) {
                 if (!res) return console.error("Response object undefined before sending PUT validation error!");
-                return res.status(400).json({ message: 'Full name cannot be empty.' });
+                return res.status(400).json({ message: 'ПІБ не може бути порожнім.' });
             }
-            updateData.full_name = full_name;
+            updateData.full_name = full_name.trim();
         }
-        if (position !== undefined) { updateData.position = position; }
-        if (contact_info !== undefined) { updateData.contact_info = contact_info; }
+        if (position !== undefined) { updateData.position = position; } // Дозволяємо null
+        if (contact_info !== undefined) { updateData.contact_info = contact_info; } // Дозволяємо null
 
+        // Обробка ролі в комісії
+        if (commission_role !== undefined) {
+             const validRoles = Object.values(CommissionRole);
+             if (!validRoles.includes(commission_role)) {
+                  if (!res) return console.error("Response object undefined before sending PUT validation error!");
+                  return res.status(400).json({ message: `Некоректна роль в комісії.` });
+             }
+             updateData.commission_role = commission_role;
+        }
+        // Обробка прапорця голови підприємства
+        if (is_head_of_enterprise !== undefined) {
+            if (typeof is_head_of_enterprise !== 'boolean') {
+                 if (!res) return console.error("Response object undefined before sending PUT validation error!");
+                 return res.status(400).json({ message: 'Значення для "Голова підприємства" має бути true або false.' });
+            }
+            updateData.is_head_of_enterprise = is_head_of_enterprise;
+        }
+         // Обробка прапорця головного бухгалтера
+        if (is_chief_accountant !== undefined) {
+             if (typeof is_chief_accountant !== 'boolean') {
+                 if (!res) return console.error("Response object undefined before sending PUT validation error!");
+                 return res.status(400).json({ message: 'Значення для "Головний бухгалтер" має бути true або false.' });
+             }
+             updateData.is_chief_accountant = is_chief_accountant;
+        }
+        // Обробка прапорця відповідальної особи (якщо потрібно)
+        // if (is_responsible !== undefined) {
+        //     if (typeof is_responsible !== 'boolean') {
+        //          if (!res) return console.error("Response object undefined before sending PUT validation error!");
+        //          return res.status(400).json({ message: 'Значення для "Відповідальна особа" має бути true або false.' });
+        //     }
+        //     updateData.is_responsible = is_responsible;
+        // }
+
+
+        // Перевіряємо, чи є що оновлювати
         if (Object.keys(updateData).length === 0) {
              if (!res) return console.error("Response object undefined before sending PUT validation error!");
-            return res.status(400).json({ message: 'No fields provided for update.' });
+            return res.status(400).json({ message: 'Не надано полів для оновлення.' });
         }
 
+        // Оновлюємо запис
         const updatedEmployee = await prisma.employee.update({
           where: { id: employeeId },
           data: updateData,
-          select: { id: true, full_name: true, position: true, contact_info: true, is_active: true, is_responsible: true },
+          // Оновлюємо select, щоб повернути всі поля
+          select: {
+              id: true, full_name: true, position: true, contact_info: true,
+              is_active: true, is_responsible: true,
+              commission_role: true, is_head_of_enterprise: true, is_chief_accountant: true
+            },
         });
 
         if (!res) return console.error("Response object undefined before sending PUT success response!");
+        // Тип відповіді тепер EmployeeUpdateResponseData
         res.status(200).json(updatedEmployee);
 
       } catch (error) {
@@ -125,62 +200,37 @@ export default async function handler(
             return res.status(409).json({ message: `Update failed: An employee with this ${field} already exists.` });
           }
         }
-        res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) }); // Додано details
+        res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) });
       } finally {
-        // Disconnect moved to the end
+        // Disconnect moved
       }
   }
   // --- Handle DELETE request (Logical Delete - ONLY Employee) ---
   else if (req.method === 'DELETE') {
+      // ... (код DELETE залишається без змін) ...
        try {
-            // 1. Перевіряємо, чи існує співробітник
-            const employeeToDeactivate = await prisma.employee.findUnique({
-                where: { id: employeeId },
-                select: { id: true } // Достатньо перевірити існування
-            });
-
+            const employeeToDeactivate = await prisma.employee.findUnique({ where: { id: employeeId }, select: { id: true } });
             if (!employeeToDeactivate) {
                 if (!res) return console.error("Response object undefined before sending DELETE 404 error!");
                 return res.status(404).json({ message: `Employee with ID ${employeeId} not found.` });
             }
-
-            // 2. Оновлюємо ТІЛЬКИ статус співробітника
             const deactivatedEmployee = await prisma.employee.update({
                 where: { id: employeeId },
-                data: {
-                    is_active: false,
-                    is_responsible: false, // Зазвичай, неактивний співробітник не може бути відповідальним
-                },
-                 select: { id: true, is_active: true }, // Повертаємо підтвердження
+                data: { is_active: false, is_responsible: false, },
+                 select: { id: true, is_active: true },
             });
-
-            // *** ВИДАЛЕНО ЛОГІКУ ОНОВЛЕННЯ AssetInstance ***
-            // const assignedAssets = await prisma.assetInstance.findMany({ where: { current_employee_id: employeeId }, select: { id: true } });
-            // if (assignedAssets.length > 0) {
-            //     const assetIds = assignedAssets.map(a => a.id);
-            //     await prisma.assetInstance.updateMany({
-            //         where: { id: { in: assetIds } },
-            //         data: { current_employee_id: null, status: 'on_stock' }
-            //     });
-            //      console.log(`Unassigned ${assetIds.length} assets from deactivated employee ${employeeId}`);
-            //      // TODO: Add logic to update/create assignment history records for returned assets
-            // }
-
             console.log(`Deactivated employee ${employeeId}. Asset processing moved to separate step.`);
-
             if (!res) return console.error("Response object undefined before sending DELETE success response!");
             res.status(200).json(deactivatedEmployee);
-
        } catch (error) {
             console.error(`Failed to deactivate employee ${employeeId}:`, error);
              if (!res) return console.error("Response object undefined before sending DELETE error response!");
             if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-                // Ця помилка тепер може виникнути, якщо співробітника видалили між findUnique та update
                 return res.status(404).json({ message: `Employee with ID ${employeeId} not found during deactivation attempt.` });
             }
-            res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) }); // Додано details
+            res.status(500).json({ message: 'Internal Server Error', details: error instanceof Error ? error.message : String(error) });
        } finally {
-            // Disconnect moved to the end
+            // Disconnect moved
        }
   }
   // --- Handle other methods ---
