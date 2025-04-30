@@ -26,7 +26,7 @@ model Employee {
   is_active      Boolean  @default(true)
   is_responsible Boolean  @default(false) // Матеріально-відповідальна особа
 
-  // --- Нові поля для ролей ---
+  // --- Поля для ролей ---
   is_head_of_enterprise Boolean @default(false) // Голова підприємства (для підпису актів)
   is_chief_accountant   Boolean @default(false) // Головний бухгалтер (для підпису актів)
   commission_role       CommissionRole @default(none) // Роль в комісії зі списання
@@ -53,6 +53,8 @@ model AssetCategory {
 model AssetType {
   id                  Int       @id @default(autoincrement())
   name                String
+  // --- Нове поле: Одиниця виміру ---
+  unit_of_measure     String    @default("шт.") // Значення за замовчуванням "шт."
   minimum_stock_level Int       // Мінімальна *загальна* кількість цього типу
   notes               String?
   created_at          DateTime  @default(now())

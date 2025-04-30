@@ -14,8 +14,7 @@ type WriteOffItemDto = {
   assetTypeId: number;
   quantity: number;
   reason?: string | null;
-  // Додаємо назву типу, яку фронтенд вже має
-  assetTypeName?: string;
+  // assetTypeName?: string; // Ім'я типу більше не потрібне з фронтенду
 };
 
 // Тип для тіла POST запиту
@@ -23,11 +22,12 @@ type GenerateProtocolDto = {
   items: WriteOffItemDto[];
 };
 
-// Тип для члена комісії у відповіді
-type CommissionMemberData = {
+// *** ВИЗНАЧЕННЯ ТИПУ ДЛЯ ЧЛЕНА КОМІСІЇ/ПІДПИСАНТА ***
+type SignatoryData = {
     full_name: string;
     position: string | null;
-    role: CommissionRole;
+    // Додаємо необов'язкову роль для членів комісії
+    role?: CommissionRole;
 };
 
 // Тип для елемента таблиці списання у відповіді
@@ -35,20 +35,25 @@ type ProtocolItemData = {
     assetTypeName: string;
     quantity: number;
     reason: string | null;
-    // Можна додати вартість, якщо потрібно
-    // unitCost?: string;
-    // totalCost?: string;
+    assetTypeId: number;
+    unitOfMeasure: string; // <--- Додано одиницю виміру
+    // unitCost?: string; // <--- Можна додати вартість пізніше
+    // totalCost?: string; // <--- Можна додати суму пізніше
 };
 
 // Тип для успішної відповіді (дані для протоколу)
 type ProtocolDataResponse = {
-  protocolDate: string; // Дата у форматі РРРР-ММ-ДД
-  // protocolNumber?: string; // Номер протоколу (якщо потрібен)
+  protocolDate: string;
+  organizationName: string;
+  organizationCode: string;
+  headOfEnterprise: SignatoryData | null;
+  chiefAccountant: SignatoryData | null;
+  responsiblePerson: SignatoryData | null;
   commission: {
-      chair: CommissionMemberData | null; // Голова комісії
-      members: CommissionMemberData[];    // Члени комісії
+      chair: SignatoryData | null; // Використовуємо SignatoryData
+      members: SignatoryData[];    // Використовуємо SignatoryData
   };
-  items: ProtocolItemData[]; // Таблиця списання
+  items: ProtocolItemData[];
 };
 
 type ApiErrorData = { message: string; details?: any };
@@ -58,10 +63,13 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ProtocolDataResponse | ApiErrorData>
 ) {
-  // Обробляємо тільки POST запити
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ message: `Method ${req.method} Not Allowed` });
+    if (res && !res.headersSent) {
+        res.setHeader('Allow', ['POST']);
+        return res.status(405).json({ message: `Method ${req.method} Not Allowed` });
+    } else { console.error("Response unavailable/headers sent for non-POST method."); }
+    if (prisma) { await prisma.$disconnect().catch((e: unknown) => console.error("Failed to disconnect Prisma Client:", e)); }
+    return;
   }
 
   // --- Обробка POST-запиту ---
@@ -70,55 +78,87 @@ export default async function handler(
 
     // --- Валідація вхідних даних ---
     if (!Array.isArray(items) || items.length === 0) {
+        if (!res) { console.error("POST Generate Protocol: Response undefined before sending validation error!"); return; }
         return res.status(400).json({ message: 'Масив "items" є обов\'язковим і не може бути порожнім.' });
     }
-    // Проста перевірка наявності основних полів
+    const assetTypeIds = new Set<number>();
     for (const item of items) {
         if (typeof item.assetTypeId !== 'number' || typeof item.quantity !== 'number' || item.quantity <= 0) {
+             if (!res) { console.error("POST Generate Protocol: Response undefined before sending validation error!"); return; }
             return res.status(400).json({ message: 'Некоректні дані в одному з елементів списку списання (assetTypeId або quantity).' });
         }
+        assetTypeIds.add(item.assetTypeId);
     }
 
-    // --- Отримання членів комісії ---
-    const commissionMembersRaw = await prisma.employee.findMany({
-        where: {
-            is_active: true,
-            commission_role: { in: [CommissionRole.member, CommissionRole.chair] },
-        },
-        select: { full_name: true, position: true, commission_role: true },
-        orderBy: [{ commission_role: 'desc' }, { full_name: 'asc' }],
-    });
+    // --- Отримання даних паралельно ---
+    const [
+        commissionMembersRaw, // Тип буде визначено Prisma автоматично
+        headOfEnterpriseRaw,
+        chiefAccountantRaw,
+        responsiblePersonRaw,
+        assetTypesData
+    ] = await Promise.all([
+        prisma.employee.findMany({
+            where: { is_active: true, commission_role: { in: [CommissionRole.member, CommissionRole.chair] } },
+            select: { full_name: true, position: true, commission_role: true },
+            orderBy: [{ commission_role: 'desc' }, { full_name: 'asc' }],
+        }),
+        prisma.employee.findFirst({ where: { is_active: true, is_head_of_enterprise: true }, select: { full_name: true, position: true } }),
+        prisma.employee.findFirst({ where: { is_active: true, is_chief_accountant: true }, select: { full_name: true, position: true } }),
+        prisma.employee.findFirst({ where: { is_active: true, is_responsible: true }, select: { full_name: true, position: true } }),
+        prisma.assetType.findMany({
+            where: { id: { in: Array.from(assetTypeIds) } },
+            select: { id: true, name: true, unit_of_measure: true }
+        })
+    ]);
 
-    // Розділяємо голову та членів
-    const commission: ProtocolDataResponse['commission'] = {
-        chair: null,
-        members: [],
-    };
-    commissionMembersRaw.forEach(member => {
-        const memberData: CommissionMemberData = {
+    if (assetTypesData.length !== assetTypeIds.size) {
+         return res.status(400).json({ message: 'Один або декілька вказаних типів активів не знайдено.' });
+    }
+    const assetTypeMap = new Map(assetTypesData.map(t => [t.id, t]));
+
+    // --- Формування даних комісії ---
+    const commission: ProtocolDataResponse['commission'] = { chair: null, members: [] };
+    // Явно типізуємо member тут
+    commissionMembersRaw.forEach((member: { full_name: string; position: string | null; commission_role: CommissionRole }) => {
+        // *** ВИПРАВЛЕНО: Використовуємо SignatoryData для memberData ***
+        const memberData: SignatoryData = {
             full_name: member.full_name,
             position: member.position,
             role: member.commission_role,
         };
         if (member.commission_role === CommissionRole.chair && !commission.chair) {
-            commission.chair = memberData; // Беремо першого знайденого голову
+            commission.chair = memberData;
         } else {
             commission.members.push(memberData);
         }
     });
 
+    // --- Формування даних підписантів ---
+    const headOfEnterprise: SignatoryData | null = headOfEnterpriseRaw ? { ...headOfEnterpriseRaw } : null;
+    const chiefAccountant: SignatoryData | null = chiefAccountantRaw ? { ...chiefAccountantRaw } : null;
+    const responsiblePerson: SignatoryData | null = responsiblePersonRaw ? { ...responsiblePersonRaw } : null;
+
     // --- Формування даних для таблиці протоколу ---
-    // Ми вже маємо назви типів з фронтенду, тому не робимо зайвий запит до БД
-    const protocolItems: ProtocolItemData[] = items.map(item => ({
-        assetTypeName: item.assetTypeName || `ID: ${item.assetTypeId}`, // Використовуємо назву з запиту або ID
-        quantity: item.quantity,
-        reason: item.reason || null,
-        // TODO: Додати логіку отримання вартості, якщо потрібно
-    }));
+    const protocolItems: ProtocolItemData[] = items.map(item => {
+        const assetTypeInfo = assetTypeMap.get(item.assetTypeId);
+        return {
+            assetTypeName: assetTypeInfo?.name ?? `ID: ${item.assetTypeId}`,
+            quantity: item.quantity,
+            reason: item.reason || null,
+            assetTypeId: item.assetTypeId,
+            unitOfMeasure: assetTypeInfo?.unit_of_measure ?? 'шт.',
+        };
+    });
 
     // --- Формування фінальної відповіді ---
     const protocolData: ProtocolDataResponse = {
-        protocolDate: new Date().toISOString().split('T')[0], // Поточна дата
+        protocolDate: new Date().toISOString().split('T')[0],
+        organizationName: "Державне агентство розвитку туризму України",
+        organizationCode: "43553128",
+        headOfEnterprise: headOfEnterprise,
+        chiefAccountant: chiefAccountant,
+        responsiblePerson: responsiblePerson,
         commission: commission,
         items: protocolItems,
     };
@@ -135,6 +175,9 @@ export default async function handler(
         console.error("Response unavailable or headers sent in generate protocol error handler.");
     }
   } finally {
-    // await prisma.$disconnect().catch((e: unknown) => console.error("Failed to disconnect Prisma Client:", e));
+    if (prisma) {
+        try { await prisma.$disconnect(); }
+        catch (disconnectError) { console.error("Failed to disconnect Prisma Client:", disconnectError); }
+    }
   }
 }
