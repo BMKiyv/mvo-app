@@ -14,14 +14,12 @@ import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
 import Alert from '@mui/material/Alert';
 import Paper from '@mui/material/Paper';
-// *** ДОДАНО ІМПОРТИ ТАБЛИЦІ ***
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
-// *** КІНЕЦЬ ІМПОРТІВ ТАБЛИЦІ ***
 import TextField from '@mui/material/TextField';
 import IconButton from '@mui/material/IconButton';
 import Select, { SelectChangeEvent } from '@mui/material/Select';
@@ -35,11 +33,11 @@ import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
 import ListSubheader from '@mui/material/ListSubheader';
-import Card from '@mui/material/Card';
-import CardHeader from '@mui/material/CardHeader';
-import CardContent from '@mui/material/CardContent';
+// Removed unused Card imports, using Paper instead for layout consistency
+// import Card from '@mui/material/Card';
+// import CardHeader from '@mui/material/CardHeader';
+// import CardContent from '@mui/material/CardContent';
 import Tooltip from '@mui/material/Tooltip';
-
 
 // MUI Icons
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -48,6 +46,7 @@ import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import PrintIcon from '@mui/icons-material/Print';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
+import ArticleIcon from '@mui/icons-material/Article';
 import Link from 'next/link';
 
 // --- Fetcher function ---
@@ -75,10 +74,9 @@ type WriteOffFormShape = { items: WriteOffItem[]; };
 type ProtocolItemDto = { assetTypeId: number; quantity: number; reason?: string | null; assetTypeName?: string; };
 type GenerateProtocolDto = { items: ProtocolItemDto[]; };
 type CommissionMemberData = { full_name: string; position: string | null; role: CommissionRole; };
-type ProtocolItemData = { assetTypeName: string; quantity: number; reason: string | null; };
+type ProtocolItemData = { assetTypeName: string; quantity: number; reason: string | null; assetTypeId: number; };
 type ProtocolDataResponse = { protocolDate: string; commission: { chair: CommissionMemberData | null; members: CommissionMemberData[]; }; items: ProtocolItemData[]; };
 type PerformWriteOffResponse = { message: string; createdLogEntries: number; };
-// *** ВИПРАВЛЕНО ТИП SNACKBAR ***
 type SnackbarState = { open: boolean; message: string; severity: 'success' | 'error' | 'info' | 'warning'; } | null;
 type ApiErrorData = { message: string; details?: any };
 
@@ -89,17 +87,16 @@ export default function WriteOffPage() {
     const { mutate } = useSWRConfig();
 
     // --- State ---
-    const [isSubmitting, setIsSubmitting] = React.useState(false);
     const [isGeneratingProtocol, setIsGeneratingProtocol] = React.useState(false);
-    const [snackbar, setSnackbar] = React.useState<SnackbarState>(null); // Використовуємо виправлений тип
+    const [snackbar, setSnackbar] = React.useState<SnackbarState>(null);
 
     // --- Data Fetching ---
     const { data: assetTypes, error: assetTypesError } = useSWR<AssetTypeOption[]>('/api/asset-types', fetcher);
     const { data: commissionMembers, error: membersError } = useSWR<CommissionMember[]>('/api/employees/commission-members', fetcher);
 
     // --- React Hook Form ---
-    // Переконуємося, що errors деструктуровано правильно
-    const { control, handleSubmit, reset, watch, setValue, trigger, getValues, formState: { errors } } = useForm<WriteOffFormShape>({
+    // Ensure errors is destructured correctly
+    const { control, handleSubmit, reset, watch, setValue, trigger, getValues, formState: { errors, isSubmitting: isFormSubmitting } } = useForm<WriteOffFormShape>({ // Use isSubmitting from formState
         defaultValues: { items: [] },
         mode: 'onChange'
     });
@@ -112,21 +109,38 @@ export default function WriteOffPage() {
     const handleRemoveItem = (index: number) => { remove(index); };
     const handleCloseSnackbar = (event?: React.SyntheticEvent | Event, reason?: string) => { if (reason === 'clickaway') return; setSnackbar(null); };
 
-    // --- Generate Protocol ---
-    const handleGenerateProtocol = async () => {
-        const isValid = await trigger();
-        const currentItems = getValues("items");
+    // --- Helper to Generate Protocol HTML ---
+    // Define function ONCE here
+    const generateProtocolHtml = (data: ProtocolDataResponse): string => {
+        const chair = data.commission.chair;
+        const members = data.commission.members;
+        const itemsHtml = data.items.map((item, index) => `<tr><td style="border: 1px solid black; padding: 5px; text-align: center;">${index + 1}</td><td style="border: 1px solid black; padding: 5px;">${item.assetTypeName || 'N/A'}</td><td style="border: 1px solid black; padding: 5px; text-align: right;">${item.quantity}</td><td style="border: 1px solid black; padding: 5px;">${item.reason || ''}</td></tr>`).join('');
+        // Return HTML string
+        return `<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><title>Акт Списання Матеріальних Цінностей</title><style>@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .no-print { display: none !important; } } body { font-family: 'Times New Roman', Times, serif; font-size: 14px; line-height: 1.4; margin: 30px; } table { border-collapse: collapse; width: 100%; margin-top: 15px; font-size: 12px; } th, td { border: 1px solid black; padding: 4px 6px; vertical-align: top; word-wrap: break-word; } th { background-color: #f2f2f2 !important; text-align: center; font-weight: bold; } .header, .approval { text-align: center; margin-bottom: 20px; } .commission { margin-top: 20px; } .signatures { margin-top: 40px; page-break-inside: avoid; } .signature-row { display: flex; justify-content: space-between; margin-top: 30px; } .signature-item { width: 45%; text-align: left; } .signature-line { margin-top: 10px; border-bottom: 1px solid black; min-width: 150px; display: inline-block; } .signature-label { font-size: 10px; text-align: center; } p { margin: 5px 0; }</style></head><body><div class="approval">ЗАТВЕРДЖУЮ<br/>_________________________<br/>(Посада керівника)<br/>_________ <span class="signature-line"></span><br/>(Підпис) (Ініціали, прізвище)<br/>«___» ____________ 20__ р.</div><div class="header"><h2>АКТ СПИСАННЯ № ____</h2><h3>матеріальних цінностей</h3><p>від ${new Date(data.protocolDate).toLocaleDateString('uk-UA')}</p></div><div class="commission"><p>Комісія, призначена наказом від «___» ____________ 20__ р. № ____ у складі:</p><p>Голова комісії: ${chair ? `${chair.position || '________________'} ${chair.full_name}` : '_____________________________'}</p><p>Члени комісії:</p>${members.map(m => `<p>${m.position || '________________'} ${m.full_name}</p>`).join('')}${members.length === 0 ? '<p>(Члени комісії не вказані)</p>' : ''}<p>провела огляд матеріальних цінностей, що значаться на балансі установи, та встановила, що наступні підлягають списанню:</p></div><table><thead><tr><th>№ п/п</th><th>Найменування цінностей</th><th>Кількість</th><th>Причина списання</th></tr></thead><tbody>${itemsHtml}</tbody></table><div class="signatures"><p>Висновок комісії: ________________________________________________________________</p><p>________________________________________________________________________________</p><br/><div class="signature-row"><div class="signature-item">Голова комісії _________ <span class="signature-line"></span><br/><span class="signature-label">(підпис) (${chair ? chair.full_name.split(' ').slice(-1).join(' ') : '_________'})</span></div><div class="signature-item">Головний бухгалтер _________ <span class="signature-line"></span><br/><span class="signature-label">(підпис) (ініціали, прізвище)</span></div></div>${members.map(m => `<div class="signature-row"><div class="signature-item">Член комісії _________ <span class="signature-line"></span><br/><span class="signature-label">(підпис) (${m.full_name.split(' ').slice(-1).join(' ')})</span></div><div class="signature-item"></div></div>`).join('')}</div><div class="print-button-container no-print"><button onclick="window.print()">Друк</button></div></body></html>`;
+    };
 
+    // --- Generate Protocol and Navigate ---
+    // Define function ONCE here
+    const handleGenerateProtocol = async () => {
+        console.log("[handleGenerateProtocol] Started.");
+        const isValid = await trigger(); // Trigger validation for all fields
+        const currentItems = getValues("items");
+        console.log(`[handleGenerateProtocol] Form valid: ${isValid}, Items count: ${currentItems?.length}`);
+
+        // Check form validity and if items exist
         if (!isValid || !currentItems || currentItems.length === 0) {
             setSnackbar({ open: true, message: 'Будь ласка, заповніть всі необхідні поля та додайте хоча б один актив.', severity: 'warning' });
             return;
         }
+        // Check if commission members are loaded
         if (!commissionMembers || commissionMembers.length < 1) {
              setSnackbar({ open: true, message: 'Не вдалося завантажити дані комісії або комісія не призначена.', severity: 'warning' });
             return;
         }
+
         setIsGeneratingProtocol(true);
         setSnackbar(null);
+
         const payload: GenerateProtocolDto = {
             items: currentItems.map(item => ({
                 assetTypeId: Number(item.assetTypeId),
@@ -135,53 +149,52 @@ export default function WriteOffPage() {
                 assetTypeName: assetTypes?.find(t => t.id === Number(item.assetTypeId))?.name || `ID: ${item.assetTypeId}`
             }))
         };
+        console.log("[handleGenerateProtocol] Payload for API:", payload);
+
         try {
             const response = await fetch('/api/inventory/generate-protocol', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            console.log("[handleGenerateProtocol] API response status:", response.status);
             const protocolData: ProtocolDataResponse | ApiErrorData = await response.json();
-            if (!response.ok) { throw new Error((protocolData as ApiErrorData).message || `HTTP error! status: ${response.status}`); }
-            const protocolHtml = generateProtocolHtml(protocolData as ProtocolDataResponse);
-            const printWindow = window.open('', '_blank', 'height=800,width=800,scrollbars=yes');
-            if (printWindow) {
-                printWindow.document.write(protocolHtml);
-                printWindow.document.close();
-                setTimeout(() => { try { printWindow.print(); } catch (printError) { console.error("Print error:", printError); setSnackbar({ open: true, message: 'Помилка виклику друку. Спробуйте вручну (Ctrl+P).', severity: 'warning' }); } }, 500);
-                 setSnackbar({ open: true, message: 'Протокол сформовано. Відкривається вікно друку.', severity: 'success' });
-            } else { setSnackbar({ open: true, message: 'Не вдалося відкрити вікно для друку. Перевірте блокування спливаючих вікон.', severity: 'warning' }); }
+
+            if (!response.ok) {
+                 console.error("[handleGenerateProtocol] API Error:", protocolData);
+                 throw new Error((protocolData as ApiErrorData).message || `HTTP error! status: ${response.status}`);
+            }
+            console.log("[handleGenerateProtocol] Received protocol data:", protocolData);
+
+            // Save to sessionStorage and navigate
+            try {
+                sessionStorage.setItem('protocolPreviewData', JSON.stringify(protocolData));
+                console.log("[handleGenerateProtocol] Data saved to sessionStorage. Attempting navigation...");
+                // Use router.push without await, handle result in .then/.catch
+                router.push('/inventory/protocol-preview')
+                    .then(success => {
+                        console.log("[handleGenerateProtocol] router.push completed. Success:", success);
+                        if (!success) {
+                             console.warn("[handleGenerateProtocol] Navigation returned false.");
+                             setSnackbar({ open: true, message: 'Не вдалося виконати перехід на сторінку перегляду.', severity: 'error' });
+                        }
+                    })
+                    .catch(navError => {
+                        console.error("[handleGenerateProtocol] Error during router.push:", navError);
+                        setSnackbar({ open: true, message: `Помилка навігації: ${navError.message}`, severity: 'error' });
+                    });
+                 console.log("[handleGenerateProtocol] router.push call initiated.");
+            } catch (storageError) {
+                 console.error("[handleGenerateProtocol] Session storage error:", storageError);
+                 setSnackbar({ open: true, message: 'Помилка збереження даних для перегляду протоколу.', severity: 'error' });
+            }
+
         } catch (err) {
-            console.error("Protocol generation error:", err);
+            console.error("[handleGenerateProtocol] Fetch/processing error:", err);
             setSnackbar({ open: true, message: `Помилка формування протоколу: ${err instanceof Error ? err.message : 'Невідома помилка'}`, severity: 'error' });
-        } finally { setIsGeneratingProtocol(false); }
+        } finally {
+             setIsGeneratingProtocol(false);
+             console.log("[handleGenerateProtocol] Finished.");
+        }
     };
 
-    // --- Submit Write-Off ---
-    const onSubmit: SubmitHandler<WriteOffFormShape> = async (data) => {
-        if (!data.items || data.items.length === 0) { setSnackbar({ open: true, message: 'Список списання порожній.', severity: 'warning' }); return; }
-        const confirmed = confirm(`Ви впевнені, що хочете підтвердити списання ${data.items.length} позицій? Це оновить залишки.`);
-        if (!confirmed) return;
-        setIsSubmitting(true);
-        setSnackbar(null);
-        const payload = { items: data.items.map(item => ({ assetTypeId: Number(item.assetTypeId), quantity: Number(item.quantity), reason: item.reason || null, })), };
-        try {
-            const response = await fetch('/api/inventory/perform-write-off', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), });
-            const result: PerformWriteOffResponse | ApiErrorData = await response.json();
-            if (!response.ok) { throw new Error((result as ApiErrorData).message || `HTTP error! status: ${response.status}`); }
-            setSnackbar({ open: true, message: (result as PerformWriteOffResponse).message || 'Списання успішно зафіксовано!', severity: 'success' });
-            reset({ items: [] });
-            mutate('/api/dashboard/summary');
-            mutate('/api/asset-types');
-        } catch (err) {
-            console.error("Write-off submission error:", err);
-            setSnackbar({ open: true, message: `Помилка списання: ${err instanceof Error ? err.message : 'Невідома помилка'}`, severity: 'error' });
-        } finally { setIsSubmitting(false); }
-    };
-
-    // --- Helper to Generate Protocol HTML ---
-    const generateProtocolHtml = (data: ProtocolDataResponse): string => {
-        const chair = data.commission.chair;
-        const members = data.commission.members;
-        const itemsHtml = data.items.map((item, index) => `<tr><td style="border: 1px solid black; padding: 5px; text-align: center;">${index + 1}</td><td style="border: 1px solid black; padding: 5px;">${item.assetTypeName || 'N/A'}</td><td style="border: 1px solid black; padding: 5px; text-align: right;">${item.quantity}</td><td style="border: 1px solid black; padding: 5px;">${item.reason || ''}</td></tr>`).join('');
-        return `<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><title>Акт Списання Матеріальних Цінностей</title><style>@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .no-print { display: none; } } body { font-family: 'Times New Roman', Times, serif; font-size: 14px; line-height: 1.4; margin: 30px; } table { border-collapse: collapse; width: 100%; margin-top: 15px; font-size: 12px; } th, td { border: 1px solid black; padding: 4px 6px; vertical-align: top; } th { background-color: #f2f2f2; text-align: center; font-weight: bold; } .header, .approval { text-align: center; margin-bottom: 20px; } .commission { margin-top: 20px; } .signatures { margin-top: 40px; page-break-inside: avoid; } .signature-row { display: flex; justify-content: space-between; margin-top: 30px; } .signature-item { width: 45%; text-align: left; } .signature-line { margin-top: 10px; border-bottom: 1px solid black; min-width: 150px; display: inline-block; } .signature-label { font-size: 10px; text-align: center; } p { margin: 5px 0; }</style></head><body><div class="approval">ЗАТВЕРДЖУЮ<br/>_________________________<br/>(Посада керівника)<br/>_________ <span class="signature-line"></span><br/>(Підпис) (Ініціали, прізвище)<br/>«___» ____________ 20__ р.</div><div class="header"><h2>АКТ СПИСАННЯ</h2><h3>матеріальних цінностей</h3><p>від ${new Date(data.protocolDate).toLocaleDateString('uk-UA')}</p></div><div class="commission"><p>Комісія, призначена наказом від «___» ____________ 20__ р. № ____ у складі:</p><p>Голова комісії: ${chair ? `${chair.position || '________________'} ${chair.full_name}` : '_____________________________'}</p><p>Члени комісії:</p>${members.map(m => `<p>${m.position || '________________'} ${m.full_name}</p>`).join('')}${members.length === 0 ? '<p>(Члени комісії не вказані)</p>' : ''}<p>провела огляд матеріальних цінностей, що значаться на балансі установи, та встановила, що наступні підлягають списанню:</p></div><table><thead><tr><th>№ п/п</th><th>Найменування цінностей</th><th>Кількість</th><th>Причина списання</th></tr></thead><tbody>${itemsHtml}</tbody></table><div class="signatures"><p>Висновок комісії: ________________________________________________________________</p><p>________________________________________________________________________________</p><br/><div class="signature-row"><div class="signature-item">Голова комісії _________ <span class="signature-line"></span><br/><span class="signature-label">(підпис) (ініціали, прізвище)</span></div><div class="signature-item">Головний бухгалтер _________ <span class="signature-line"></span><br/><span class="signature-label">(підпис) (ініціали, прізвище)</span></div></div>${members.map(m => `<div class="signature-row"><div class="signature-item">Член комісії _________ <span class="signature-line"></span><br/><span class="signature-label">(підпис) (ініціали, прізвище)</span></div><div class="signature-item"></div></div>`).join('')}</div><button class="no-print" onclick="window.print()">Друк</button></body></html>`;
-    };
+    // --- Submit Write-Off (ВИДАЛЕНО) ---
 
 
     return (
@@ -203,7 +216,6 @@ export default function WriteOffPage() {
                 <Button variant="outlined" startIcon={<AddCircleOutlineIcon />} onClick={handleAddItem} sx={{ mb: 2 }} >
                     Додати Рядок
                 </Button>
-                {/* *** ВИПРАВЛЕНО: Додано TableContainer *** */}
                 <TableContainer>
                     <Table size="small">
                         <TableHead>
@@ -258,8 +270,8 @@ export default function WriteOffPage() {
                     </Table>
                 </TableContainer>
                  {/* *** ВИПРАВЛЕНО: Перевірка помилок форми *** */}
-                 {Object.keys(errors).length > 0 && (
-                     <Alert severity="error" sx={{ mt: 2 }}>Будь ласка, виправте помилки у формі.</Alert>
+                 {errors.items && ( // Check if there are errors within the items array
+                     <Alert severity="error" sx={{ mt: 2 }}>Будь ласка, виправте помилки в рядках списання.</Alert>
                  )}
             </Paper>
 
@@ -288,14 +300,12 @@ export default function WriteOffPage() {
                  <Box sx={{ flex: 1.5, minWidth: 0 }}>
                      <Paper elevation={2} sx={{ p: 2, display: 'flex', flexDirection:'column', gap: 2, height: '100%' }}>
                         <Typography variant="h6">Дії</Typography>
-                        <Button variant="outlined" startIcon={<PrintIcon />} onClick={handleGenerateProtocol} disabled={!watchItems || watchItems.length === 0 || !commissionMembers || isSubmitting || isGeneratingProtocol} >
-                            {isGeneratingProtocol ? <CircularProgress size={24} /> : 'Сформувати Протокол'}
+                        <Button variant="outlined" startIcon={<ArticleIcon />} onClick={handleGenerateProtocol} disabled={!watchItems || watchItems.length === 0 || !commissionMembers || isGeneratingProtocol} >
+                            {isGeneratingProtocol ? <CircularProgress size={24} /> : 'Сформувати Акт'}
                         </Button>
-                         <Button variant="contained" color="error" startIcon={<CheckCircleOutlineIcon />} onClick={handleSubmit(onSubmit)} disabled={!watchItems || watchItems.length === 0 || isSubmitting || isGeneratingProtocol} >
-                             {isSubmitting ? <CircularProgress size={24} color="inherit" /> : 'Підтвердити Списання'}
-                         </Button>
+                         {/* --- Кнопка Підтвердження Списання Видалена --- */}
                          <Typography variant="caption" color="text.secondary">
-                            Увага: Після підтвердження списання буде зафіксовано в системі. Перевірте дані перед підтвердженням.
+                            Натисніть "Сформувати Акт", щоб переглянути та роздрукувати документ. Підтвердження списання відбувається на сторінці перегляду акту.
                          </Typography>
                     </Paper>
                 </Box>
