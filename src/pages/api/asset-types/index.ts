@@ -34,25 +34,43 @@ type ApiResponseData = ApiResponseDataGET | CreateAssetTypeResponse;
 type ApiErrorData = { message: string; details?: any };
 
 // --- Допоміжна функція для підрахунку кількості ---
+// --- Оновлена Допоміжна функція для підрахунку кількості ---
 async function calculateQuantities(assetTypeId: number): Promise<{ totalQuantity: number; onStockQuantity: number }> {
-    try {
-        const [totalInstanceData, onStockInstanceData, writeOffData] = await Promise.all([
-            prisma.assetInstance.aggregate({ _sum: { quantity: true }, where: { assetTypeId: assetTypeId } }),
-            prisma.assetInstance.aggregate({ _sum: { quantity: true }, where: { assetTypeId: assetTypeId, status: AssetStatus.on_stock } }),
-            prisma.writeOffLog.aggregate({ _sum: { quantity: true }, where: { assetTypeId: assetTypeId, } })
-        ]);
-        const totalReceivedSum = totalInstanceData._sum.quantity ?? 0;
-        const onStockInstanceSum = onStockInstanceData._sum.quantity ?? 0;
-        const writtenOffSum = writeOffData._sum.quantity ?? 0;
-        const currentStock = onStockInstanceSum - writtenOffSum;
-        return {
-            totalQuantity: totalReceivedSum,
-            onStockQuantity: Math.max(0, currentStock),
-        };
-    } catch (error) {
-        console.error(`Error calculating quantities for asset type ${assetTypeId}:`, error);
-        return { totalQuantity: 0, onStockQuantity: 0 };
-    }
+  try {
+      // Виконуємо два запити паралельно:
+      // 1. Сума кількості всіх НЕ списаних екземплярів (totalQuantity)
+      // 2. Сума кількості екземплярів тільки зі статусом 'on_stock' (onStockQuantity)
+      const [totalActiveInstanceData, onStockInstanceData] = await Promise.all([
+          prisma.assetInstance.aggregate({
+              _sum: { quantity: true },
+              where: {
+                  assetTypeId: assetTypeId,
+                  status: { not: AssetStatus.written_off } // Виключаємо списані
+              }
+          }),
+          prisma.assetInstance.aggregate({
+              _sum: { quantity: true },
+              where: {
+                  assetTypeId: assetTypeId,
+                  status: AssetStatus.on_stock // Тільки ті, що на складі
+              }
+          })
+          // Запит до WriteOffLog видалено
+      ]);
+
+      // Отримуємо результати, якщо суми немає, вважаємо 0
+      const totalActiveQuantity = totalActiveInstanceData._sum.quantity ?? 0;
+      const onStockQuantity = onStockInstanceData._sum.quantity ?? 0;
+
+      return {
+          totalQuantity: totalActiveQuantity,   // Загальна кількість активних (не списаних)
+          onStockQuantity: onStockQuantity,     // Кількість на складі
+      };
+  } catch (error) {
+      console.error(`Error calculating quantities for asset type ${assetTypeId}:`, error);
+      // Повертаємо нулі у разі помилки
+      return { totalQuantity: 0, onStockQuantity: 0 };
+  }
 }
 
 

@@ -93,6 +93,7 @@ const generateProtocolHtml = (data: ProtocolDataResponse): string => {
             <meta charset="UTF-8">
             <title>Акт Списання Запасів</title>
             <style>
+            .css-0{margin:20px 20px 20px 80px}
                 @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; margin: 15mm; } .no-print { display: none !important; } }
                 body { font-family: 'Times New Roman', Times, serif; font-size: 14px; line-height: 1.4; margin: 20px; }
                 table { border-collapse: collapse; width: 100%; margin-top: 15px; font-size: 12px; }

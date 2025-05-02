@@ -115,17 +115,66 @@ export default async function handler(
              //     updatesToPerform.push(tx.assetInstance.update({ ... }));
              // } else {
                  // Списуємо весь екземпляр
-                 updatesToPerform.push(
-                     tx.assetInstance.update({
-                         where: { id: instance.id },
-                         data: {
-                             status: AssetStatus.written_off,
-                             current_employee_id: null, // Завжди знімаємо власника
-                             notes: instance.notes ? `${instance.notes}\n${notesUpdate}` : notesUpdate,
-                             // quantity: 0, // Можна обнулити кількість при повному списанні
-                         },
-                     })
-                 );
+// --- Модифікована Логіка Списання ---
+
+if (quantityToWriteOff === instance.quantity) {
+  // --- Повне списання екземпляра ---
+  const notesUpdate = reason
+      ? `Повністю списано (${writeOffDate.toLocaleDateString('uk-UA')}): ${reason}`
+      : `Повністю списано (${writeOffDate.toLocaleDateString('uk-UA')})`;
+
+  updatesToPerform.push(
+      tx.assetInstance.update({
+          where: { id: instance.id },
+          data: {
+              status: AssetStatus.written_off,
+              quantity: 0, // Обнуляємо кількість
+              current_employee_id: null, // Завжди знімаємо власника при повному списанні
+              notes: instance.notes ? `${instance.notes}\n${notesUpdate}` : notesUpdate,
+          },
+      })
+  );
+
+  // Оновлення історії ТІЛЬКИ при повному списанні, якщо був виданий
+  if (instance.status === AssetStatus.issued && instance.current_employee_id) {
+      updatesToPerform.push(
+          tx.assetAssignmentHistory.updateMany({
+              where: {
+                  asset_instance_id: instance.id,
+                  employee_id: instance.current_employee_id,
+                  return_date: null,
+              },
+              data: { return_date: writeOffDate },
+          })
+      );
+  }
+
+} else if (quantityToWriteOff < instance.quantity) {
+  // --- Часткове списання екземпляра ---
+  const notesUpdate = reason
+      ? `Частково списано ${quantityToWriteOff} од. (${writeOffDate.toLocaleDateString('uk-UA')}): ${reason}`
+      : `Частково списано ${quantityToWriteOff} од. (${writeOffDate.toLocaleDateString('uk-UA')})`;
+
+  updatesToPerform.push(
+      tx.assetInstance.update({
+          where: { id: instance.id },
+          data: {
+              quantity: {
+                  decrement: quantityToWriteOff, // Зменшуємо кількість
+              },
+              // Статус і власник не змінюються при частковому списанні
+              // Якщо потрібно змінити статус на 'damaged' або інший, додайте логіку тут
+              notes: instance.notes ? `${instance.notes}\n${notesUpdate}` : notesUpdate,
+          },
+      })
+  );
+  // НЕ оновлюємо історію видачі при частковому списанні,
+  // оскільки залишок активу все ще може бути у співробітника
+}
+// Видаляємо старий блок оновлення історії, що був поза умовою
+
+processedCount++; // Залишаємо лічильник
+processedInstanceIds.add(instance.id); // Залишаємо відстеження ID
              // }
 
              // Оновлення історії, якщо був виданий
