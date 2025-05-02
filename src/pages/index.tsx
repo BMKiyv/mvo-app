@@ -151,7 +151,7 @@ export default function DashboardPage() {
   // Log received data when it changes
   React.useEffect(() => {
       if (dashboardData?.recentActivities) {
-          console.log("Received Recent Activities Data:", JSON.stringify(dashboardData.recentActivities, null, 2)); // Pretty print JSON
+         // console.log("Received Recent Activities Data:", JSON.stringify(dashboardData.recentActivities, null, 2)); // Pretty print JSON
       }
        if (error) {
            console.error("Dashboard fetch error:", error);

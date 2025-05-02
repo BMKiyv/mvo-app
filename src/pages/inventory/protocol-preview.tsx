@@ -23,8 +23,9 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import Link from 'next/link';
 
 // --- Types ---
+// Визначаємо SignatoryData тут, щоб він був доступний для generateProtocolHtml
 type SignatoryData = { full_name: string; position: string | null; role?: CommissionRole; };
-type ProtocolItemData = { assetTypeName: string; quantity: number; reason: string | null; assetTypeId: number; unitOfMeasure: string; unitCost?: string; /* Додамо вартість, якщо API її поверне */ };
+type ProtocolItemData = { assetTypeName: string; quantity: number; reason: string | null; assetTypeId: number; unitOfMeasure: string; unitCost?: string; inventoryNumber: string; instanceId: number; };
 type ProtocolDataResponse = {
     protocolDate: string;
     organizationName: string;
@@ -34,13 +35,17 @@ type ProtocolDataResponse = {
     responsiblePerson: SignatoryData | null;
     commission: { chair: SignatoryData | null; members: SignatoryData[]; };
     items: ProtocolItemData[];
+    totalSum: string; // Загальна сума
 };
-type PerformWriteOffResponse = { message: string; createdLogEntries: number; };
+type PerformWriteOffPayloadItem = { instanceId: number; quantityToWriteOff: number; reason: string | null; };
+type PerformWriteOffPayload = { items: PerformWriteOffPayloadItem[]; };
+type PerformWriteOffResponse = { message: string; createdLogEntries?: number; };
 type ApiErrorData = { message: string; details?: any };
 type SnackbarState = { open: boolean; message: string; severity: 'success' | 'error' | 'info' | 'warning'; } | null;
 
 
-// --- Helper to Generate Protocol HTML (Оновлено) ---
+// --- Helper to Generate Protocol HTML ---
+// Визначення функції тут, ОДИН РАЗ
 const generateProtocolHtml = (data: ProtocolDataResponse): string => {
     const chair = data.commission.chair;
     const members = data.commission.members;
@@ -48,54 +53,39 @@ const generateProtocolHtml = (data: ProtocolDataResponse): string => {
     const accountant = data.chiefAccountant;
     const responsible = data.responsiblePerson;
 
-    // Розрахунок загальної суми (поки заглушка, потрібна unitCost)
+    // Розрахунок загальної суми
     let totalSum = 0;
     const itemsHtml = data.items.map((item, index) => {
-        // const itemSum = item.unitCost ? (Number(item.unitCost) * item.quantity) : 0;
-        // totalSum += itemSum;
+        const itemCost = item.unitCost ? Number(item.unitCost.replace(',', '.')) : 0;
+        const itemSum = !isNaN(itemCost) ? itemCost * item.quantity : 0;
+        if (!isNaN(itemSum)) { totalSum += itemSum; }
         return `
             <tr>
                 <td style="border: 1px solid black; padding: 5px; text-align: center;">${index + 1}</td>
                 <td style="border: 1px solid black; padding: 5px;">${item.assetTypeName || 'N/A'}</td>
-                <td style="border: 1px solid black; padding: 5px;"></td> {/* Номенкл. номер */}
+                <td style="border: 1px solid black; padding: 5px;">${item.inventoryNumber || ''}</td>
                 <td style="border: 1px solid black; padding: 5px; text-align: center;">${item.unitOfMeasure || 'шт.'}</td>
                 <td style="border: 1px solid black; padding: 5px; text-align: right;">${item.quantity}</td>
-                <td style="border: 1px solid black; padding: 5px; text-align: right;">${item.unitCost || '-'}</td> {/* Вартість */}
-                <td style="border: 1px solid black; padding: 5px; text-align: right;">${item.unitCost ? (Number(item.unitCost) * item.quantity).toFixed(2) : '-'}</td> {/* Сума */}
+                <td style="border: 1px solid black; padding: 5px; text-align: right;">${item.unitCost || '-'}</td>
+                <td style="border: 1px solid black; padding: 5px; text-align: right;">${item.unitCost && !isNaN(itemSum) ? itemSum.toFixed(2) : '-'}</td>
                 <td style="border: 1px solid black; padding: 5px;">${item.reason || ''}</td>
             </tr>
         `;
         }).join('');
 
-    // Функція для безпечного отримання ПІБ для підпису (Прізвище І.Б.) - без змін
-    // const getSignatoryLastNameInitial = (signatory: SignatoryData | null): string => { 
-    //             if (!signatory || !signatory.full_name) return '_________';
-    //     const parts = signatory.full_name.trim().split(' ');
-    //     if (parts.length > 0) {
-    //         let initials = '';
-    //         if (parts.length > 1) initials += ` ${parts[1][0]}.`;
-    //         if (parts.length > 2) initials += `${parts[2][0]}.`;
-    //         // Повертає Прізвище І.Б.
-    //         return `${parts[0]}${initials}`;
-    //     }
-    //     return signatory.full_name; // Fallback
-    
-    //  };
-    // --- Re-add implementation ---
-     const getSignatoryLastNameInitial = (signatory: SignatoryData | null): string => {
-        if (!signatory || !signatory.full_name) return ''; // Повертаємо порожній рядок, якщо немає даних
-        const parts = signatory.full_name.trim().split(' ');
-        if (parts.length > 0) {
-            let initials = '';
-            if (parts.length > 1) initials += ` ${parts[1][0]}.`;
-            if (parts.length > 2) initials += `${parts[2][0]}.`;
-            return `${parts[0]}${initials}`;
-        }
-        return signatory.full_name;
+    // Функція для рендерингу рядка підпису
+    const renderSignatureRow = (roleText: string, signatory: SignatoryData | null) => {
+        return `
+             <div class="signature-row">
+                 <span class="signature-role">${signatory?.position || roleText}</span>
+                 <span class="signature-line"></span>
+                 <span class="signature-name">${signatory?.full_name || ''}</span>
+             </div>
+             <div style="text-align: center;"><span class="signature-label">(посада) (підпис) (Власне ім’я ПРІЗВИЩЕ)</span></div>
+        `;
     };
 
-
-    // Оновлений HTML шаблон з усіма підписантами та структурою
+    // Оновлений HTML шаблон
     return `
         <!DOCTYPE html>
         <html lang="uk">
@@ -103,7 +93,6 @@ const generateProtocolHtml = (data: ProtocolDataResponse): string => {
             <meta charset="UTF-8">
             <title>Акт Списання Запасів</title>
             <style>
-                /* Стилі без змін */
                 @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; margin: 15mm; } .no-print { display: none !important; } }
                 body { font-family: 'Times New Roman', Times, serif; font-size: 14px; line-height: 1.4; margin: 20px; }
                 table { border-collapse: collapse; width: 100%; margin-top: 15px; font-size: 12px; }
@@ -115,13 +104,11 @@ const generateProtocolHtml = (data: ProtocolDataResponse): string => {
                 .doc-title { text-align: center; margin-bottom: 15px; }
                 .commission { margin-top: 20px; }
                 .signatures { margin-top: 40px; page-break-inside: avoid; }
-                /* Оновлені стилі для підписів */
-                .signature-row { display: flex; align-items: flex-end; margin-top: 25px; } /* Вирівнюємо по нижньому краю */
-                .signature-role { width: 150px; /* Фіксована ширина для ролі */ flex-shrink: 0; }
-                .signature-line { flex-grow: 1; /* Лінія займає доступний простір */ border-bottom: 1px solid black; margin: 0 10px; }
-                .signature-name { width: 200px; /* Фіксована ширина для імені */ flex-shrink: 0; }
+                .signature-row { display: flex; align-items: flex-end; margin-top: 25px; }
+                .signature-role { width: 250px; flex-shrink: 0; }
+                .signature-line { flex-grow: 1; border-bottom: 1px solid black; margin: 0 10px; min-width: 100px; }
+                .signature-name { width: 250px; flex-shrink: 0; text-align: right; }
                 .signature-label { font-size: 10px; text-align: center; }
-                .signature-m { margin-right: 90px; }
                 p { margin: 5px 0; }
                 .smaller-text { font-size: 10px; }
             </style>
@@ -129,26 +116,26 @@ const generateProtocolHtml = (data: ProtocolDataResponse): string => {
         <body>
              <div class="top-section">
                  <div class="org-info">
-                    ${data.organizationName || '____________________'}<br/>
-                    <span class="smaller-text"></span><br/> 
+                    ${data.organizationName || ''}<br/>
+                    <span class="smaller-text"></span><br/>
                     Ідентифікаційний код<br/>
-                    за ЄДРПОУ ${data.organizationCode || '____________________'}
+                    за ЄДРПОУ ${data.organizationCode || ''}
                  </div>
                  <div class="approval">
                     ЗАТВЕРДЖУЮ<br/>
-                    ${head ? head.position || '____________________' : '____________________'}<br/>
-                    <span class="smaller-text"></span><br/> 
-                    _________ <span class="signature-line"></span><span>${getSignatoryLastNameInitial(head)}</span><br/>
-                    <span class="smaller-text signature-m">(Підпис)</span> <br/>
+                    ${head ? head.position || '' : ''}<br/>
+                    <span class="smaller-text"></span><br/>
+                    _________ <span class="signature-line"></span><br/>
+                    <span class="smaller-text">(Підпис)</span> ${head?.full_name || ''}<br/>
                     «___» ____________ ${new Date(data.protocolDate).getFullYear()} р.
                  </div>
             </div>
 
             <div class="doc-title">
-                <h2>АКТ № ____</h2> 
+                <h2>АКТ № ____</h2>
                 <h3>списання запасів</h3>
                 <p>від ${new Date(data.protocolDate).toLocaleDateString('uk-UA')}</p>
-                <p>м. Київ, вул. Прорізна, 2</p> 
+                <p>м. Київ, вул. Прорізна, 2</p>
             </div>
 
             <div class="commission">
@@ -178,7 +165,7 @@ const generateProtocolHtml = (data: ProtocolDataResponse): string => {
                     ${itemsHtml}
                      <tr>
                          <td colspan="6" style="border: 1px solid black; padding: 5px; text-align: right; font-weight: bold;">РАЗОМ:</td>
-                         <td style="border: 1px solid black; padding: 5px; text-align: right;">${totalSum > 0 ? totalSum.toFixed(2) : '-'}</td> {/* TODO: Розрахувати суму */}
+                         <td style="border: 1px solid black; padding: 5px; text-align: right;">${totalSum > 0 ? totalSum.toFixed(2) : '-'}</td>
                          <td style="border: 1px solid black; padding: 5px;"></td>
                      </tr>
                 </tbody>
@@ -189,36 +176,10 @@ const generateProtocolHtml = (data: ProtocolDataResponse): string => {
 
 
              <div class="signatures">
-                 {/* Оновлений блок підписів */}
-                 <div class="signature-row">
-                     <span class="signature-role">Голова комісії</span>
-                     <span class="signature-line"></span>
-                     <span class="signature-name">${chair?.full_name || ''}</span>
-                 </div>
-                 <div style="text-align: center;"><span class="signature-label">(підпис)</span></div>
-
-                 ${members.map(m => `
-                    <div class="signature-row">
-                         <span class="signature-role">Член комісії</span>
-                         <span class="signature-line"></span>
-                         <span class="signature-name">${m.full_name || ''}</span>
-                     </div>
-                     <div style="text-align: center;"><span class="signature-label">(підпис)</span></div>
-                 `).join('')}
-
-                  <div class="signature-row">
-                     <span class="signature-role">Матеріально-відповідальна особа</span>
-                     <span class="signature-line"></span>
-                     <span class="signature-name">${responsible?.full_name || ''}</span>
-                 </div>
-                 <div style="text-align: center;"><span class="signature-label">(підпис)</span></div>
-
-                 <div class="signature-row">
-                     <span class="signature-role">Головний бухгалтер</span>
-                     <span class="signature-line"></span>
-                     <span class="signature-name">${accountant?.full_name || ''}</span>
-                 </div>
-                  <div style="text-align: center;"><span class="signature-label">(підпис)</span></div>
+                 ${renderSignatureRow('Голова комісії', chair)}
+                 ${members.map(m => renderSignatureRow('Член комісії', m)).join('')}
+                 ${renderSignatureRow('Матеріально-відповідальна особа', responsible)}
+                 ${renderSignatureRow('Головний бухгалтер', accountant)}
              </div>
         </body>
         </html>
@@ -230,6 +191,7 @@ const generateProtocolHtml = (data: ProtocolDataResponse): string => {
 export default function ProtocolPreviewPage() {
     const router = useRouter();
     const [protocolData, setProtocolData] = React.useState<ProtocolDataResponse | null>(null);
+    const [confirmationPayload, setConfirmationPayload] = React.useState<PerformWriteOffPayload | null>(null);
     const [error, setError] = React.useState<string | null>(null);
     const [isLoading, setIsLoading] = React.useState(true);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -240,19 +202,31 @@ export default function ProtocolPreviewPage() {
         setIsLoading(true);
         setError(null);
         setProtocolData(null);
+        setConfirmationPayload(null);
         protocolHtmlRef.current = null;
 
         try {
-            const dataString = sessionStorage.getItem('protocolPreviewData');
-            if (dataString) {
-                const parsedData = JSON.parse(dataString) as ProtocolDataResponse;
-                if (parsedData && Array.isArray(parsedData.items) && parsedData.items.length > 0 && parsedData.items.every(item => typeof item.assetTypeId === 'number') && parsedData.commission) {
-                    setProtocolData(parsedData);
-                    protocolHtmlRef.current = generateProtocolHtml(parsedData);
+            const protocolDataString = sessionStorage.getItem('protocolPreviewData');
+            const confirmationPayloadString = sessionStorage.getItem('writeOffConfirmationPayload');
+
+            if (protocolDataString && confirmationPayloadString) {
+                const parsedProtocolData = JSON.parse(protocolDataString) as ProtocolDataResponse;
+                const parsedConfirmationPayload = JSON.parse(confirmationPayloadString) as PerformWriteOffPayload;
+
+                // *** ВИПРАВЛЕНО: Використовуємо parsedProtocolData для перевірки ***
+                if (parsedProtocolData && Array.isArray(parsedProtocolData.items) && parsedProtocolData.items.length > 0 && parsedProtocolData.commission &&
+                    parsedConfirmationPayload && Array.isArray(parsedConfirmationPayload.items) && parsedConfirmationPayload.items.length > 0 &&
+                    parsedConfirmationPayload.items.every(item => typeof item.instanceId === 'number' && typeof item.quantityToWriteOff === 'number')
+                   )
+                {
+                    setProtocolData(parsedProtocolData);
+                    setConfirmationPayload(parsedConfirmationPayload);
+                    protocolHtmlRef.current = generateProtocolHtml(parsedProtocolData);
                 } else {
-                     console.error("Invalid protocol data structure in sessionStorage:", parsedData);
-                     setError('Некоректні дані для формування протоколу в сесії.');
+                     console.error("Invalid data structure in sessionStorage:", { parsedProtocolData, parsedConfirmationPayload });
+                     setError('Некоректні дані для формування/підтвердження протоколу в сесії.');
                      sessionStorage.removeItem('protocolPreviewData');
+                     sessionStorage.removeItem('writeOffConfirmationPayload');
                 }
             } else {
                 setError('Дані для протоколу не знайдено. Можливо, сторінку було оновлено або дані сесії втрачено. Будь ласка, поверніться та спробуйте згенерувати протокол знову.');
@@ -267,6 +241,7 @@ export default function ProtocolPreviewPage() {
     }, []);
 
     // --- Обробник Друку ---
+    // Визначення функції тут, ОДИН РАЗ
     const handlePrint = () => {
         const printWindow = window.open('', '_blank', 'height=800,width=800,scrollbars=yes');
         if (printWindow && protocolHtmlRef.current) {
@@ -281,27 +256,18 @@ export default function ProtocolPreviewPage() {
         }
     };
 
+
     // --- Обробник Підтвердження Списання ---
     const handleConfirmWriteOff = async () => {
-        if (!protocolData || !protocolData.items || protocolData.items.length === 0) {
+        if (!confirmationPayload || !confirmationPayload.items || confirmationPayload.items.length === 0) {
             setSnackbar({ open: true, message: 'Немає даних для підтвердження списання.', severity: 'error' });
             return;
-        }
-        if (protocolData.items.some(item => typeof item.assetTypeId !== 'number')) {
-             setSnackbar({ open: true, message: 'Помилка даних протоколу: не знайдено ID типу активу для всіх позицій.', severity: 'error' });
-             return;
         }
 
         setIsSubmitting(true);
         setSnackbar(null);
 
-        const payload = {
-            items: protocolData.items.map(item => ({
-                assetTypeId: item.assetTypeId,
-                quantity: item.quantity,
-                reason: item.reason || null,
-            })),
-        };
+        const payload = confirmationPayload;
 
         try {
             const response = await fetch('/api/inventory/perform-write-off', {
@@ -314,9 +280,11 @@ export default function ProtocolPreviewPage() {
 
             setSnackbar({ open: true, message: (result as PerformWriteOffResponse).message || 'Списання успішно зафіксовано!', severity: 'success' });
             sessionStorage.removeItem('protocolPreviewData');
+            sessionStorage.removeItem('writeOffConfirmationPayload');
 
             await mutate('/api/dashboard/summary');
             await mutate('/api/asset-types');
+            await mutate('/api/asset-instances/write-off-candidates');
 
             setProtocolData(null); // Блокуємо кнопки
 
@@ -346,7 +314,7 @@ export default function ProtocolPreviewPage() {
                  {isLoading && ( <Box sx={{ display: 'flex', justifyContent: 'center', p: 5 }}> <CircularProgress /> </Box> )}
                  {error && !isLoading && ( <Alert severity="error" sx={{ m: 2 }}>{error}</Alert> )}
                  {!isLoading && !error && protocolData && (
-                     <Box dangerouslySetInnerHTML={{ __html: protocolHtmlRef.current || '' }} sx={{ p: { xs: 1, sm: 2, md: 3 } }}/>
+                     <Box dangerouslySetInnerHTML={{ __html: protocolHtmlRef.current || '' }} />
                  )}
                  {!isLoading && !error && !protocolData && (
                      <Alert severity="info" sx={{ m: 2 }}>Немає даних для відображення протоколу. Будь ласка, поверніться на попередню сторінку та сформуйте його.</Alert>
@@ -358,13 +326,12 @@ export default function ProtocolPreviewPage() {
                  <Button component={Link} href="/inventory/write-off" startIcon={<ArrowBackIcon />}>
                      Назад до Формування Списку
                  </Button>
-                 {/* Показуємо кнопки тільки якщо є дані для протоколу */}
-                 {protocolData && (
+                 {protocolData && ( // Показуємо кнопки тільки якщо є дані
                      <Box sx={{ display: 'flex', gap: 2 }}>
                          <Button
                             variant="outlined"
                             startIcon={<PrintIcon />}
-                            onClick={handlePrint}
+                            onClick={handlePrint} // Використовуємо визначений обробник
                             disabled={isLoading || !!error || !protocolData || isSubmitting}
                          >
                              Друк Акту
