@@ -3,7 +3,7 @@
 
 generator client {
   provider = "prisma-client-js"
-  // output   = "../node_modules/.prisma/client" // Recommended for explicit output path
+  // output  = "../node_modules/.prisma/client" // Recommended for explicit output path
 }
 
 datasource db {
@@ -13,37 +13,42 @@ datasource db {
 
 // Enum для ролі в комісії зі списання
 enum CommissionRole {
-  none    // Не є членом комісії
-  member  // Член комісії
-  chair   // Голова комісії
+  none   // Не є членом комісії
+  member // Член комісії
+  chair  // Голова комісії
 }
 
 model Employee {
-  id             Int      @id @default(autoincrement())
-  full_name      String
-  position       String?
-  contact_info   String?  // Можливо, додати @unique, якщо email має бути унікальним?
-  is_active      Boolean  @default(true)
-  is_responsible Boolean  @default(false) // Матеріально-відповідальна особа
+  id                          Int      @id @default(autoincrement())
+  full_name                   String
+  position                    String?
+  contact_info                String?  // Можливо, додати @unique, якщо email має бути унікальним?
+  is_active                   Boolean  @default(true)
+  is_responsible              Boolean  @default(false) // Матеріально-відповідальна особа
 
   // --- Поля для ролей ---
-  is_head_of_enterprise Boolean @default(false) // Голова підприємства (для підпису актів)
-  is_chief_accountant   Boolean @default(false) // Головний бухгалтер (для підпису актів)
-  commission_role       CommissionRole @default(none) // Роль в комісії зі списання
+  is_head_of_enterprise       Boolean  @default(false) // Голова підприємства (для підпису актів)
+  is_chief_accountant         Boolean  @default(false) // Головний бухгалтер (для підпису актів)
+  commission_role             CommissionRole @default(none) // Потенційна роль в комісії зі списання
 
-  created_at     DateTime @default(now())
-  updated_at     DateTime? @updatedAt
+  created_at                  DateTime @default(now())
+  updated_at                  DateTime? @updatedAt
 
   // Relations
-  assetInstances AssetInstance[]          @relation("CurrentHolder")
-  assignments    AssetAssignmentHistory[]
-  // writeOffsDone WriteOffLog[] @relation("PerformedBy") // Якщо потрібно зв'язати списання з виконавцем
+  assetInstances                    AssetInstance[]                   @relation("CurrentHolder")
+  assignments                       AssetAssignmentHistory[]
+  performedWriteOffs             WriteOffLog[]                     @relation("PerformedWriteOffs") // Розкоментуйте, якщо вирішите використовувати performedById в WriteOffLog
+  assetsWrittenOffWhileResponsible  WriteOffLog[]                     @relation("ResponsibleForWrittenOffAsset")
+  chairedWriteOffs                  WriteOffLog[]                     @relation("CommissionChairForWriteOff")
+  signedAsHeadWriteOffs             WriteOffLog[]                     @relation("HeadSignatoryForWriteOff")
+  signedAsAccountantWriteOffs       WriteOffLog[]                     @relation("AccountantSignatoryForWriteOff")
+  commissionMembershipEntries       WriteOffLogCommissionMembership[] // Участь в комісіях як рядовий член
 }
 
 model AssetCategory {
-  id         Int       @id @default(autoincrement())
-  name       String    @unique
-  created_at DateTime  @default(now())
+  id         Int      @id @default(autoincrement())
+  name       String   @unique
+  created_at DateTime @default(now())
   updated_at DateTime? @updatedAt
 
   // Relations
@@ -64,7 +69,7 @@ model AssetType {
   // Relations
   category            AssetCategory   @relation(fields: [categoryId], references: [id])
   assetInstances      AssetInstance[]
-  writeOffLogs        WriteOffLog[]   // Зв'язок з логом списання
+  writeOffLogs        WriteOffLog[]   // Посилання на логування списань для цього типу активу
 }
 
 // Оновлений Enum для статусів активів
@@ -91,12 +96,13 @@ model AssetInstance {
   updated_at          DateTime? @updatedAt
 
   assetTypeId         Int
-  current_employee_id Int?
+  current_employee_id Int?      // Поточна МВО
 
   // Relations
-  assetType           AssetType  @relation(fields: [assetTypeId], references: [id])
-  currentEmployee     Employee?  @relation("CurrentHolder", fields: [current_employee_id], references: [id])
+  assetType           AssetType    @relation(fields: [assetTypeId], references: [id])
+  currentEmployee     Employee?    @relation("CurrentHolder", fields: [current_employee_id], references: [id])
   assignmentHistory   AssetAssignmentHistory[]
+  writeOffLogEntries  WriteOffLog[] // Записи в WriteOffLog, що стосуються цього конкретного екземпляра
 }
 
 model AssetAssignmentHistory {
@@ -112,20 +118,69 @@ model AssetAssignmentHistory {
   employee            Employee      @relation(fields: [employee_id], references: [id])
 }
 
-// Нова модель для логування списань
-model WriteOffLog {
-  id            Int       @id @default(autoincrement())
-  assetTypeId   Int       // Який тип активу списано
-  quantity      Int       // Скільки одиниць списано
-  writeOffDate  DateTime  @default(now()) // Дата списання
-  reason        String?   // Причина списання (опціонально)
-  // performedById Int?   // Опціонально: ID співробітника, що виконав/затвердив
-  // performedBy   Employee? @relation("PerformedBy", fields: [performedById], references: [id])
-
-  // Relation to AssetType
-  assetType     AssetType @relation(fields: [assetTypeId], references: [id])
-
-  @@index([assetTypeId])
-  @@index([writeOffDate])
+// Enum для типів операцій списання
+enum WriteOffOperationType {
+  STOCK_REDUCTION   // Списання із загального запасу (часткове)
+  INSTANCE_DISPOSAL // Повне списання конкретного екземпляра
+  INSTANCE_PARTIAL_REDUCTION // Часткове списання (зменшення кількості) конкретного екземпляра
 }
 
+// Оновлена модель для логування списань
+model WriteOffLog {
+  id                          Int       @id @default(autoincrement())
+  assetTypeId                 Int       // Який тип активу списано. Завжди заповнюється.
+  assetInstanceId             Int?      // ID конкретного екземпляра, якщо списується екземпляр (AssetInstance). Null для списання із загального запасу.
+
+  quantity                    Int       // Скільки одиниць списано.
+  unitCostAtWriteOff          Decimal?  @db.Decimal(10, 2) // Вартість за одиницю на момент списання
+  totalValueAtWriteOff        Decimal?  @db.Decimal(10, 2) // Загальна вартість списаного (quantity * unitCostAtWriteOff)
+
+  writeOffDate                DateTime  @default(now()) // Дата фактичного списання
+  reason                      String?   // Причина списання
+  operationType               WriteOffOperationType? @default(STOCK_REDUCTION) // Тип операції списання
+  writeOffDocumentNumber      String?   // Номер супровідного документа (акт списання тощо) - опціонально
+  notes                       String?   // Додаткові примітки до операції списання
+
+  performedById               Int?      // ID співробітника, що виконав/затвердив списання в системі (рекомендується залишити nullable для майбутнього)
+  responsibleEmployeeId       Int?      // ID МВО, за яким числився актив (якщо списувався з AssetInstance, що був закріплений)
+
+  // Підписанти акту списання
+  commissionChairId           Int?      // Голова комісії
+  headOfEnterpriseSignatoryId Int?      // Керівник підприємства (підписант)
+  chiefAccountantSignatoryId  Int?      // Головний бухгалтер (підписант)
+
+  // Relations
+  assetType                   AssetType     @relation(fields: [assetTypeId], references: [id])
+  assetInstance               AssetInstance?@relation(fields: [assetInstanceId], references: [id], onDelete: SetNull) // Щоб лог не видалявся, якщо видаляється AssetInstance
+  performedBy                 Employee?     @relation("PerformedWriteOffs", fields: [performedById], references: [id]) // Розкоментуйте, якщо вирішите використовувати performedById
+  responsibleEmployee         Employee?     @relation("ResponsibleForWrittenOffAsset", fields: [responsibleEmployeeId], references: [id])
+  commissionChair             Employee?     @relation("CommissionChairForWriteOff", fields: [commissionChairId], references: [id])
+  headOfEnterpriseSignatory   Employee?     @relation("HeadSignatoryForWriteOff", fields: [headOfEnterpriseSignatoryId], references: [id])
+  chiefAccountantSignatory    Employee?     @relation("AccountantSignatoryForWriteOff", fields: [chiefAccountantSignatoryId], references: [id])
+
+  commissionMemberships       WriteOffLogCommissionMembership[] // Члени комісії для цього акту списання
+
+  @@index([assetTypeId])
+  @@index([assetInstanceId])
+  @@index([writeOffDate])
+  @@index([performedById]) // Розкоментуйте, якщо вирішите використовувати performedById
+  @@index([responsibleEmployeeId])
+  @@index([operationType])
+  @@index([commissionChairId])
+  @@index([headOfEnterpriseSignatoryId])
+  @@index([chiefAccountantSignatoryId])
+}
+
+// Таблиця зв'язку для членів комісії (багато-до-багатьох між WriteOffLog та Employee)
+model WriteOffLogCommissionMembership {
+  id                       Int      @id @default(autoincrement())
+  writeOffLogId            Int      // Зовнішній ключ до WriteOffLog
+  employeeId               Int      // Зовнішній ключ до Employee (член комісії)
+
+  writeOffLog              WriteOffLog @relation(fields: [writeOffLogId], references: [id], onDelete: Cascade) // Якщо видаляється акт, видаляються і зв'язки
+  employee                 Employee    @relation(fields: [employeeId], references: [id], onDelete: Restrict) // Не можна видалити співробітника, якщо він є членом комісії в акті
+
+  @@unique([writeOffLogId, employeeId]) // Гарантує, що співробітник не дублюється в одній комісії для одного акту
+  @@index([writeOffLogId])
+  @@index([employeeId])
+}

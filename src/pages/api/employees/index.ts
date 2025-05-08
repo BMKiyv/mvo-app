@@ -1,7 +1,7 @@
 // pages/api/employees/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 // Імпортуємо Enum CommissionRole разом з іншими типами
-import { PrismaClient, Prisma, CommissionRole } from '@prisma/client';
+import { PrismaClient, Prisma, CommissionRole, Employee } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -16,6 +16,8 @@ type EmployeeSelectedData = {
   is_active: boolean;
   is_responsible: boolean;
   commission_role: CommissionRole; // Додано поле
+  is_head_of_enterprise?: Boolean;
+  is_chief_accountant?: Boolean;
 };
 
 // Тип для відповіді GET (список)
@@ -53,6 +55,7 @@ export default async function handler(
           id: true, full_name: true, position: true,
           contact_info: true, is_active: true, is_responsible: true,
           commission_role: true, // <--- Додано
+          is_head_of_enterprise:true, is_chief_accountant:true
         },
         orderBy: { full_name: 'asc' },
       });

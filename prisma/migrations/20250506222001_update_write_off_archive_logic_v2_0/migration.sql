@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "WriteOffOperationType" ADD VALUE 'INSTANCE_PARTIAL_REDUCTION';
