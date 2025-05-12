@@ -37,12 +37,14 @@ import Snackbar from '@mui/material/Snackbar';
 import Divider from '@mui/material/Divider';
 import NextLink from 'next/link';
 import FormHelperText from '@mui/material/FormHelperText';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 
 // Import Modal components
 import AddAssetTypeModal from '../../components/AddAssetTypeModal';
 import EditAssetTypeModal from '../../components/EditAssetTypeModal';
 import AddAssetInstanceModal from '../../components/AddAssetInstanceModal';
 import AddCategoryModal from '../../components/AddCategoryModal'; // Import Add Category Modal
+import AssetImportModal from '@/components/AssetImportModal';
 
 // --- Fetcher function ---
 const fetcher = (url: string) => fetch(url).then((res) => {
@@ -86,7 +88,7 @@ export default function InventoryPage() {
   const [addInstanceModalOpen, setAddInstanceModalOpen] = React.useState(false);
   const [assetTypeForInstance, setAssetTypeForInstance] = React.useState<{id: number; name: string} | null>(null);
   const [addCategoryModalOpen, setAddCategoryModalOpen] = React.useState(false); // State for Add Category Modal
-
+  const [importModalOpen, setImportModalOpen] = React.useState(false);
   const [snackbar, setSnackbar] = React.useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' } | null>(null);
 
 
@@ -124,6 +126,22 @@ export default function InventoryPage() {
     setAnchorEl(null);
     setSelectedAssetType(null);
   };
+
+   const handleOpenImportModal = () => {
+        setImportModalOpen(true);
+    };
+
+    const handleCloseImportModal = () => {
+        setImportModalOpen(false);
+    };
+
+     // Ця функція буде викликана з AssetImportModal після успішного імпорту
+    const handleImportSuccess = (count: number) => {
+        setImportModalOpen(false); // Закриваємо модал
+        mutate(assetTypesUrl); // Оновлюємо список типів (щоб побачити нові та оновити лічильники)
+        setSnackbar({open: true, message: `Успішно імпортовано ${count} записів.`, severity: 'success'});
+    };
+
 
   // --- Add Type Modal Handlers ---
   const handleOpenAddTypeModal = () => { setAddTypeModalOpen(true); };
@@ -302,7 +320,14 @@ export default function InventoryPage() {
             </TableContainer>
 
             {/* --- Write-off Button --- */}
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2, mb: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2, mb: 1, gap: 2 }}>
+                         <Button
+               variant="outlined"
+               startIcon={<UploadFileIcon />} // Переконайтесь, що імпортували UploadFileIcon
+               onClick={handleOpenImportModal} // Використовуємо ваш хендлер
+           >
+               Імпорт з файлу
+           </Button>
                 <Button variant="outlined" color="secondary" component={NextLink} href="/inventory/write-off" >
                     Списати Активи
                 </Button>
@@ -344,7 +369,11 @@ export default function InventoryPage() {
             onClose={handleCloseAddCategoryModal}
             onSubmitSuccess={handleAddCategorySuccess}
          />
-
+                 <AssetImportModal
+            open={importModalOpen}
+            onClose={handleCloseImportModal}
+            onImportSuccess={handleImportSuccess} // Передаємо callback
+         />
 
        {/* --- Snackbar --- */}
        {snackbar && ( <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
