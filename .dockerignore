@@ -1,0 +1,43 @@
+# Файл локів Dockerfile (якщо використовуєте BuildKit)
+Dockerfile.dockerignore
+
+# Залежності
+node_modules
+
+# Вихідні файли збірки Next.js
+.next
+
+# Логи npm/yarn/pnpm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Файли середовища (не повинні потрапляти в образ!)
+.env*
+!.env.example
+!.env.template
+
+# Налаштування IDE та системи
+.vscode
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*~
+
+# Файли Git
+.git
+.gitignore
+.gitattributes
+
+# Файли ОС
+Thumbs.db
+.DS_Store
+
+# Папка для тестів (якщо не потрібна у production образі)
+# cypress/
+# tests/
+# coverage/

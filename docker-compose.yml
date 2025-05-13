@@ -1,0 +1,58 @@
+version: '3.8' # Вказуємо версію синтаксису
+
+services:
+  # Сервіс для вашого Next.js додатку
+  app:
+    build:
+      context: . # Папка, де знаходиться Dockerfile
+      dockerfile: Dockerfile # Назва Dockerfile
+    container_name: mvo-app-nextjs # Ім'я контейнера для зручності
+    restart: unless-stopped # Політика перезапуску
+    ports:
+      - "3000:3000" # Прокидаємо порт 3000 з контейнера на хост
+    environment:
+      # Рядок підключення до БД всередині Docker Compose мережі
+      # Використовує ім'я сервісу 'postgres' та змінні з секції postgres
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      # ВАЖЛИВО: Додайте сюди ВСІ інші змінні середовища,
+      # які потрібні вашому додатку для роботи (секрети, ключі API тощо)
+      # Наприклад:
+      # NEXTAUTH_URL: http://localhost:3000 # Якщо використовуєте NextAuth
+      # NEXTAUTH_SECRET: your_strong_secret # Згенеруйте надійний секрет
+      NODE_ENV: production
+      PORT: 3000
+    depends_on:
+      - postgres # Гарантує, що сервіс postgres запуститься перед app
+    networks:
+      - mvo-network # Підключаємо до створеної нижче мережі
+
+  # Сервіс для бази даних PostgreSQL
+  postgres:
+    image: postgres:15-alpine # Використовуємо офіційний образ PostgreSQL 15
+    container_name: mvo-app-postgres
+    restart: unless-stopped
+    environment:
+      # Змінні для ініціалізації бази даних образом Postgres
+      # Значення за замовчуванням використовуються, якщо не задані змінні в .env
+      POSTGRES_DB: ${POSTGRES_DB:-mvo_assets_db}
+      POSTGRES_USER: ${POSTGRES_USER:-mvo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your_very_strong_password123} # !!! ЗАМІНІТЬ НА НАДІЙНИЙ ПАРОЛЬ !!!
+    volumes:
+      # Створюємо іменований volume для зберігання даних БД
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Прокидаємо порт 5432 з контейнера на порт 5433 хоста
+      # (щоб уникнути конфлікту з локальною БД на порту 5432)
+      - "5433:5432"
+    networks:
+      - mvo-network
+
+# Визначаємо мережу для комунікації між сервісами
+networks:
+  mvo-network:
+    driver: bridge
+
+# Визначаємо іменований volume для даних БД
+volumes:
+  postgres_data:
+    driver: local
